@@ -66,5 +66,5 @@ it):
 - They try 0.1 with DA 3.26.4's Notepad.
 - Android, per the brief.
 
-**Releasing:** bump the version (README, `src/Directory.Build.props`), `.build.ps1`, commit, tag `vX.Y.Z`, push,
+**Releasing:** bump the version (README, `src/Directory.Build.props`), `.\build.ps1`, commit, tag `vX.Y.Z`, push,
 `gh release create vX.Y.Z artifacts\DaisysServer-Setup-X.Y.Z.exe` (no workflow: built here).
