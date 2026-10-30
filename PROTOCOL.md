@@ -4,7 +4,7 @@ How a client (Daisy's App, Daisy's App Mobile, `tools/TestClient`) talks to Dais
 description of it.** The code is `src/DaisysServer.Core/Protocol/` (`Wire.cs`, `ServerClient.cs`), copied word for word
 into Daisy's App's `src/DaisysApp.Core/Server/`. A change to either copy goes into both.
 
-Version 1 (Daisy's Server 0.1.0, Daisy's App 3.26.4).
+Version 1 (Daisy's Server 0.1.0, Daisy's App 3.26.4; its settings in Settings → General since 3.26.5).
 
 ## 1. Connecting
 

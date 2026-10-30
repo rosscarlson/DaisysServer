@@ -29,8 +29,8 @@ SmartScreen may warn you: choose **More info → Run anyway**. Everything it nee
 ## Setting it up
 
 1. **Users**: add one for each person. Make yourself an admin. A user's password makes the key their data is sealed
-   with, and each user can change it from a client (Daisy's App: Settings → Tools → Notepad → Daisy's Server →
-   Change password).
+   with, and each user can change it from a client (Daisy's App: Settings → General → Daisy's Server → Change
+   password).
    - Setting a new password here, on the server, **deletes that user's data**, since it can't be opened without the
      old one.
 2. **Tokens**: make one for each person or device and send it to them. **Revoke** shuts it out and drops its
@@ -40,9 +40,9 @@ SmartScreen may warn you: choose **More info → Run anyway**. Everything it nee
      **Settings**).
    - From the internet: forward that TCP port on your router to this PC, and use your public address (**Show public
      address** on Status) or a DNS name for it.
-4. **In Daisy's App** (3.26.4 or later): Settings → Tools → Notepad → **Daisy's Server**. Fill in the address, port,
-   token, user and password, then **Connect**. Then pick **Daisy's Server** in the Notepad's host box. The tabs you
-   already had go up to the server the first time.
+4. **In Daisy's App** (3.26.5 or later): Settings → General → **Daisy's Server**. Fill in the address, port, token,
+   user and password, then **Connect**. Tools → Notepad then keeps its notes here; the tabs you already had go up to
+   the server the first time.
 
 ## The window
 

@@ -32,17 +32,19 @@ Module notes are in each module's own CLAUDE.md (`src/Modules/Notepad/CLAUDE.md`
   setting;
 - version 0.1, delivered to Downloads.
 
-**Asked (2026-10-30):** create the repo as 0.1, then commit DA's side, after checking other sessions' Core changes.
+**Asked (2026-10-30):** create the repo as 0.1 and commit DA's side (done: DA 3.26.4). Then, in DA: the server's
+settings to Settings → General, no descriptions on that page, Notepad on the server only with no network code of its
+own, publish (done: DA 3.26.5).
 
-**Done:** this whole repo (layout in the README), 0.1.0. In Downloads: `DaisysServer-Setup-0.1.0.exe`,
-`DaisysServer-Android-Brief.md` (its DA version updated to 3.26.4). Released 2026-10-30: the repo is
-`rosscarlson/DaisysServer` (public), tag `v0.1.0` with the installer (the updater's source). Other sessions hadn't
-touched Notepad or `Server/`; only Core's version number clashed (they took 0.46–0.48), so ours is 0.49. DA's side went
-out in DA 3.26.4 (also in 3.26.3, which another session re-tagged on top of it). DA's untracked `*-GAMER11.*` files are
-OneDrive conflict copies, left out. DA's side:
-- Core 0.49 `src/DaisysApp.Core/Server/` (ServerLink, ServerSettingsView, the protocol copies);
-- Tools → Notepad's `NotepadView.ServerNoteLink`;
-- docs: the Notepad README, API.md, `src/Modules/Tools/CLAUDE.md`, `docs/UNTESTED.md`.
+**Done:** this whole repo (layout in the README), 0.1.0, released 2026-10-30: `rosscarlson/DaisysServer` (public), tag
+`v0.1.0` with the installer (the updater's source). In Downloads: the installer and `DaisysServer-Android-Brief.md`
+(updated for 3.26.5: no PC hosts). DA's side (details in DA's `src/Modules/Tools/CLAUDE.md`):
+- Core 0.50 `src/DaisysApp.Core/Server/`: ServerLink, `KeptChannel` (`ServerLink.Keep`: a module's channel kept open,
+  reconnecting), ServerSettingsView (the card, on Settings → General), the protocol copies;
+- Tools → Notepad: `NotepadView.ServerNoteLink` only (no host box, no PC hosting; `NoteServer.cs` deleted).
+- Core's `RemoteChannels` (the AI port's module channels) is left in DA, now unused.
+- DA's untracked `*-GAMER11.*` files are OneDrive conflict copies; another session's uncommitted AI work there is left
+  alone (commit only your own files there).
 
 **Decisions (mine, told to the user):**
 - **Connecting:** a token is `dsk1_` + 6 bytes of id + a 32-byte secret. The handshake is ECDH P-256 with HKDF, salted
@@ -53,19 +55,20 @@ OneDrive conflict copies, left out. DA's side:
   one. Users change their own password from a client and keep everything.
 - **Notepad:** the operational transformation stays on the clients. The server only orders the sealed changes and
   keeps snapshots plus the changes since. DA translates, so its notepad page is unchanged.
-- **Where the DA card lives:** on Notepad's Settings page, because the shell was being changed by another session.
-  It could move to Settings → General later.
+- **KnownHost in DA's Notepad** is `host:port user`, so tabs last in step with another server (or an old PC host) go up
+  as new tabs instead of being dropped.
 - **Default port:** 38900.
 
 **Where it stands:**
 - **Tested:** TestClient's 19 checks pass on the Debug and the published builds. Two DA copies worked through a test
-  server. The stored data is ciphertext only.
+  server. The stored data is ciphertext only. DA 3.26.5: two copies through a test server (tabs up, a poke live on
+  both, the server restarted and both back in 5 s), Settings → General on screen.
 - **Not tested:** the installer (install, firewall, upgrade, uninstall), an update from a release (needs 0.1.1),
   typing by hand, the Users, Tokens and Settings pages by hand, the internet, admin ops from a client.
 
 **Next (waiting on the user):**
-- They try 0.1 with DA 3.26.4's Notepad.
-- Android, per the brief.
+- They try 0.1 with DA 3.26.5.
+- Android, per the brief (the phone's notepad can't reach a PC host since DA 3.26.5).
 
 **Releasing:** bump the version (README, `src/Directory.Build.props`), `.\build.ps1`, commit, tag `vX.Y.Z`, push,
 `gh release create vX.Y.Z artifacts\DaisysServer-Setup-X.Y.Z.exe` (no workflow: built here).

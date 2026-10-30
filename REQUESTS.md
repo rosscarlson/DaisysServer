@@ -60,3 +60,9 @@ Daisy's Server 0.1 is built, and the installer is in Downloads: `DaisysServer-Se
 ---
 
 Yes, create the repo (Daisy's Server) as 0.1 - then commit everything that isn't - other sessions have made chnges to DA Core so you'll need to make sure you're good, it shouldn't have touched what you did but check it first then commit everything so I can test everything with the notepad app
+
+Let's move the settings for DS out of the Tools -> Notepad settings page and put it on the main Settings -> General.
+
+Also on that page, Settings/General remove ALL descriptive text - leave the names of the options but all the sentences you added explaining each thing, remove all that, I know what all this is. Also remove the feature in the current Notepad allowing it to connect to anything other than the server - any network code that's in the notepad app should be removed, it should all be in DA Core's API so that all apps can use our connection to the server.
+
+Publish as next subversion when ready
