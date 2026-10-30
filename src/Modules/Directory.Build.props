@@ -1,0 +1,23 @@
+<Project>
+  <!--
+    Every server module (a folder here with a .csproj) is a class library the server loads at runtime from
+    modules\<folder>\ next to DaisysServer.exe. It references DaisysServer.Core (the module interface, the store, the
+    log) but doesn't copy it: the server supplies it.
+  -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)..'))" />
+
+  <PropertyGroup>
+    <ModuleName>$([System.IO.Path]::GetFileName($(MSBuildProjectDirectory)))</ModuleName>
+    <AssemblyName>DaisysServer.$(ModuleName)</AssemblyName>
+    <RootNamespace>DaisysServer.Modules.$(ModuleName)</RootNamespace>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <!-- straight into the server's modules folder, so running it picks the module up; build.ps1 passes ModulesOut -->
+    <ModulesOut Condition="'$(ModulesOut)' == ''">$(MSBuildThisFileDirectory)..\DaisysServer\bin\$([MSBuild]::ValueOrDefault('$(Configuration)', 'Debug'))\net8.0-windows\modules</ModulesOut>
+    <OutDir>$(ModulesOut)\$(ModuleName)\</OutDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(MSBuildThisFileDirectory)..\DaisysServer.Core\DaisysServer.Core.csproj" Private="false" />
+  </ItemGroup>
+</Project>

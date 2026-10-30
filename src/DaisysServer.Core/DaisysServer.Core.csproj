@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- What the server and its modules share: the module interface, the wire and its crypto, the log, settings files. -->
+  <PropertyGroup>
+    <RootNamespace>DaisysServer</RootNamespace>
+  </PropertyGroup>
+</Project>

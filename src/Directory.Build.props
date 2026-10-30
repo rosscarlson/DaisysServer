@@ -1,0 +1,13 @@
+<Project>
+  <!-- Shared by the server, DaisysServer.Core and every module (src/Modules/Directory.Build.props adds the module bits). -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Version>0.1.0</Version>
+    <Product>Daisy's Server</Product>
+    <Company>rosscarlson</Company>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+</Project>
