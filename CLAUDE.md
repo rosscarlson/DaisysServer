@@ -67,8 +67,9 @@ own, publish (done: DA 3.26.5).
   typing by hand, the Users, Tokens and Settings pages by hand, the internet, admin ops from a client.
 
 **Next (waiting on the user):**
-- They try 0.1 with DA 3.26.5.
+- They try 0.1 with DA 3.26.5 (untested: typing by hand, the card's Change password and Forget).
 - Android, per the brief (the phone's notepad can't reach a PC host since DA 3.26.5).
+- Offered: removing DA's now-unused `RemoteChannels` (Core, and the AI module's side of it).
 
 **Releasing:** bump the version (README, `src/Directory.Build.props`), `.\build.ps1`, commit, tag `vX.Y.Z`, push,
 `gh release create vX.Y.Z artifacts\DaisysServer-Setup-X.Y.Z.exe` (no workflow: built here).
