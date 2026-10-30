@@ -32,13 +32,14 @@ Module notes are in each module's own CLAUDE.md (`src/Modules/Notepad/CLAUDE.md`
   setting;
 - version 0.1, delivered to Downloads.
 
-**Done (0.1.0):** this whole repo was built (layout in the README). Delivered to Downloads:
-- `DaisysServer-Setup-0.1.0.exe` (from `.\build.ps1`);
-- `DaisysServer-Android-Brief.md`.
+**Asked (2026-10-30):** create the repo as 0.1, then commit DA's side, after checking other sessions' Core changes.
 
-**Released (2026-10-30):** this repo is `rosscarlson/DaisysServer` (public), tag `v0.1.0` with the installer (the
-updater's source). Daisy's App's side went out in DA 3.26.4 (also in 3.26.3, which another session re-tagged on top of
-it):
+**Done:** this whole repo (layout in the README), 0.1.0. In Downloads: `DaisysServer-Setup-0.1.0.exe`,
+`DaisysServer-Android-Brief.md` (its DA version updated to 3.26.4). Released 2026-10-30: the repo is
+`rosscarlson/DaisysServer` (public), tag `v0.1.0` with the installer (the updater's source). Other sessions hadn't
+touched Notepad or `Server/`; only Core's version number clashed (they took 0.46–0.48), so ours is 0.49. DA's side went
+out in DA 3.26.4 (also in 3.26.3, which another session re-tagged on top of it). DA's untracked `*-GAMER11.*` files are
+OneDrive conflict copies, left out. DA's side:
 - Core 0.49 `src/DaisysApp.Core/Server/` (ServerLink, ServerSettingsView, the protocol copies);
 - Tools → Notepad's `NotepadView.ServerNoteLink`;
 - docs: the Notepad README, API.md, `src/Modules/Tools/CLAUDE.md`, `docs/UNTESTED.md`.
