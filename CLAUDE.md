@@ -36,8 +36,10 @@ Module notes are in each module's own CLAUDE.md (`src/Modules/Notepad/CLAUDE.md`
 - `DaisysServer-Setup-0.1.0.exe` (from `.\build.ps1`);
 - `DaisysServer-Android-Brief.md`.
 
-Daisy's App's side is in its repo, **uncommitted**:
-- Core 0.45 `src/DaisysApp.Core/Server/` (ServerLink, ServerSettingsView, the protocol copies);
+**Released (2026-10-30):** this repo is `rosscarlson/DaisysServer` (public), tag `v0.1.0` with the installer (the
+updater's source). Daisy's App's side went out in DA 3.26.4 (also in 3.26.3, which another session re-tagged on top of
+it):
+- Core 0.49 `src/DaisysApp.Core/Server/` (ServerLink, ServerSettingsView, the protocol copies);
 - Tools → Notepad's `NotepadView.ServerNoteLink`;
 - docs: the Notepad README, API.md, `src/Modules/Tools/CLAUDE.md`, `docs/UNTESTED.md`.
 
@@ -57,14 +59,12 @@ Daisy's App's side is in its repo, **uncommitted**:
 **Where it stands:**
 - **Tested:** TestClient's 19 checks pass on the Debug and the published builds. Two DA copies worked through a test
   server. The stored data is ciphertext only.
-- **Not tested:** the installer (install, firewall, upgrade, uninstall), updates (the GitHub repo
-  `rosscarlson/DaisysServer` doesn't exist, so a check says up to date), typing by hand, the Users, Tokens and
-  Settings pages by hand, the internet, admin ops from a client.
-- **Not a git repo yet:** nothing is committed here.
+- **Not tested:** the installer (install, firewall, upgrade, uninstall), an update from a release (needs 0.1.1),
+  typing by hand, the Users, Tokens and Settings pages by hand, the internet, admin ops from a client.
 
 **Next (waiting on the user):**
-- They try 0.1.
-- Whether to create the GitHub repo, git init and publish 0.1.0.
-- Whether to release DA with its side (3.25.1: version, CHANGELOG, `strings.py --prune`; check the last tag first,
-  since another session works there).
+- They try 0.1 with DA 3.26.4's Notepad.
 - Android, per the brief.
+
+**Releasing:** bump the version (README, `src/Directory.Build.props`), `.uild.ps1`, commit, tag `vX.Y.Z`, push,
+`gh release create vX.Y.Z artifacts\DaisysServer-Setup-X.Y.Z.exe` (no workflow: built here).

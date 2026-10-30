@@ -40,7 +40,7 @@ SmartScreen may warn you: choose **More info → Run anyway**. Everything it nee
      **Settings**).
    - From the internet: forward that TCP port on your router to this PC, and use your public address (**Show public
      address** on Status) or a DNS name for it.
-4. **In Daisy's App** (3.25.1 or later): Settings → Tools → Notepad → **Daisy's Server**. Fill in the address, port,
+4. **In Daisy's App** (3.26.4 or later): Settings → Tools → Notepad → **Daisy's Server**. Fill in the address, port,
    token, user and password, then **Connect**. Then pick **Daisy's Server** in the Notepad's host box. The tabs you
    already had go up to the server the first time.
 
