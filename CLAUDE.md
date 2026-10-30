@@ -34,9 +34,14 @@ Module notes are in each module's own CLAUDE.md (`src/Modules/Notepad/CLAUDE.md`
 
 **Asked (2026-10-30):** create the repo as 0.1 and commit DA's side (done: DA 3.26.4). Then, in DA: the server's
 settings to Settings → General, no descriptions on that page, Notepad on the server only with no network code of its
-own, publish (done: DA 3.26.5).
+own, publish (done: DA 3.26.5). Then a **Files** module: clients (Android first) browse this PC's drives, the shared ones
+picked in Settings; everything to list, detail, preview and open; a brief for the Android session; publish (done:
+0.1.1, notes in `src/Modules/Files/CLAUDE.md`).
 
-**Done:** this whole repo (layout in the README), 0.1.0, released 2026-10-30: `rosscarlson/DaisysServer` (public), tag
+**Done:** 0.1.1 (2026-10-30): the Files module (`src/Modules/Files/`), `IServerModule.SettingsView` (a module's card in
+Settings; the old Files folders card is now **Folders**), `Ui.Size` up to TB, TestClient's `files:` checks (and
+`setup` shares %TEMP%'s drive), PROTOCOL §5. `Downloads\DaisysServer-Files-Android-Brief.md` for the Android session.
+Before that, this whole repo (layout in the README), 0.1.0, released 2026-10-30: `rosscarlson/DaisysServer` (public), tag
 `v0.1.0` with the installer (the updater's source). In Downloads: the installer and `DaisysServer-Android-Brief.md`
 (updated for 3.26.5: no PC hosts). DA's side (details in DA's `src/Modules/Tools/CLAUDE.md`):
 - Core 0.50 `src/DaisysApp.Core/Server/`: ServerLink, `KeptChannel` (`ServerLink.Keep`: a module's channel kept open,
@@ -58,16 +63,21 @@ own, publish (done: DA 3.26.5).
 - **KnownHost in DA's Notepad** is `host:port user`, so tabs last in step with another server (or an old PC host) go up
   as new tabs instead of being dropped.
 - **Default port:** 38900.
+- **Files:** read-only, admins only by default (**Basic users too**), no drive shared until ticked, not sealed (the
+  server's own files; encrypted on the connection only), the client pulls pieces of at most 1 MB.
 
 **Where it stands:**
-- **Tested:** TestClient's 19 checks pass on the Debug and the published builds. Two DA copies worked through a test
+- **Tested:** TestClient's 32 checks (16 of them Files') pass on 0.1.1's Debug and published builds.
+  Files' Settings card on screen. Two DA copies worked through a test
   server. The stored data is ciphertext only. DA 3.26.5: two copies through a test server (tabs up, a poke live on
   both, the server restarted and both back in 5 s), Settings → General on screen.
 - **Not tested:** the installer (install, firewall, upgrade, uninstall), an update from a release (needs 0.1.1),
   typing by hand, the Users, Tokens and Settings pages by hand, the internet, admin ops from a client.
 
 **Next (waiting on the user):**
-- They try 0.1 with DA 3.26.5 (untested: typing by hand, the card's Change password and Forget).
+- They try 0.1.1 with DA 3.26.5 (untested: typing by hand, the card's Change password and Forget).
+- The Android session builds Files from the brief (not tested yet: a basic user refused, PNG/video/PDF thumbnails).
+  Daisy's App (Windows) has no Files client; not asked.
 - Android, per the brief (the phone's notepad can't reach a PC host since DA 3.26.5).
 - Offered: removing DA's now-unused `RemoteChannels` (Core, and the AI module's side of it).
 

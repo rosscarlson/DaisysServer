@@ -10,7 +10,8 @@ namespace DaisysServer.Pages;
 
 /// <summary>
 /// Settings: the server (its name and port), startup and the tray, updates (the version, checking at launch, Check for
-/// updates), the modules (each switched on or off, from the next start), and its folders.
+/// updates), the modules (each switched on or off, from the next start), each module's own card (its SettingsView),
+/// and its folders.
 /// </summary>
 internal sealed class SettingsPage : UserControl
 {
@@ -105,14 +106,25 @@ internal sealed class SettingsPage : UserControl
 
         // ---- folders
         var files = new StackPanel();
-        files.Children.Add(Ui.Header("Files"));
+        files.Children.Add(Ui.Header("Folders"));
         var settingsFolder = Folder("Settings, users and tokens", JsonFile.SettingsFolder);
         var dataFolder = Folder("Users' data", JsonFile.DataFolder);
         var logs = Folder("Logs", ModuleLog.Folder);
         dataFolder.Margin = logs.Margin = new Thickness(8, 0, 0, 0);
         files.Children.Add(Ui.Row(settingsFolder, dataFolder, logs));
 
-        Content = Ui.Page(Ui.Card(serverCard), Ui.Card(startup), Ui.Card(updates), Ui.Card(modules), Ui.Card(files));
+        // ---- each module's own settings (Files: the shared drives)
+        var cards = new List<UIElement> { Ui.Card(serverCard), Ui.Card(startup), Ui.Card(updates), Ui.Card(modules) };
+        foreach (var m in server.Catalog.Modules)
+        {
+            try
+            {
+                if (m.Instance?.SettingsView is { } view) cards.Add(Ui.Card(view));
+            }
+            catch (Exception ex) { ModuleLog.Server.Warn($"Module {m.Name}: its settings couldn't be shown", ex); }
+        }
+        cards.Add(Ui.Card(files));
+        Content = Ui.Page(cards.ToArray());
     }
 
     private CheckBox Check(string text, bool value, Action<bool> set)

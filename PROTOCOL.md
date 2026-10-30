@@ -4,7 +4,8 @@ How a client (Daisy's App, Daisy's App Mobile, `tools/TestClient`) talks to Dais
 description of it.** The code is `src/DaisysServer.Core/Protocol/` (`Wire.cs`, `ServerClient.cs`), copied word for word
 into Daisy's App's `src/DaisysApp.Core/Server/`. A change to either copy goes into both.
 
-Version 1 (Daisy's Server 0.1.0, Daisy's App 3.26.4; its settings in Settings → General since 3.26.5).
+Version 1 (Daisy's Server 0.1.0, Daisy's App 3.26.4; its settings in Settings → General since 3.26.5). The `files`
+module (§5) came in Daisy's Server 0.1.1, still version 1: a server without it says so when it's opened.
 
 ## 1. Connecting
 
@@ -170,3 +171,43 @@ clients merge the changes themselves, using operational transformation (`NoteTex
 
 Daisy's App's `NotepadView.ServerNoteLink` turns these messages into its usual ones, so the rest of its notepad is
 unchanged.
+
+## 5. The `files` module (since 0.1.1)
+
+The server PC's own files, for a client to browse, preview and open: only the drives picked in the server's
+**Settings → Shared drives**, and **read-only** (nothing here writes, moves or deletes). Admins only, unless
+**Basic users too** is on there.
+
+**Not sealed.** These are the server's files, not a user's data, so the server reads them and sends them as they are.
+They're encrypted on the connection (§1), like everything else, but not with the user's data key.
+
+Every question carries a `rid` (any number). Its answer has the same `op` and `rid`, or it's
+`{op: "error", rid, message}` (show the message: it's written for people). Questions are answered four at a time, so
+answers can come in any order: match them by `rid`.
+
+| Ask | Answer |
+|---|---|
+| `{op: "roots"}` | `{op: "roots", roots: [drive]}`: the shared drives, in order. None shared: `[]`. |
+| `{op: "list", path, skip?, max?}` | `{op: "list", path, parent, count, skip, items: [entry]}`: folders first, then files, each in Explorer's order (`2` before `10`). `count` is how many there are in all; `items` is up to `max` (default 5000, at most 20000) from `skip` (default 0). `parent` is null at a drive's root. |
+| `{op: "stat", path}` | One `entry`, plus `path`, `parent`, `accessed`, `attributes` (Windows' names, as `"ReadOnly, Archive"`), and for a file `ext` (lower case, with the dot) and `mime` (Windows' type for it, when it has one); `target` for a link. |
+| `{op: "read", path, offset?, length?}` | `{op: "read", path, offset, length, size, eof, modified, data}`: up to `length` bytes (default 256 KB, at most 1 MB) from `offset` (default 0), as base64. `length` is how many came (0 past the end); `size` is the file's size now; `eof` says this piece reaches the end. |
+| `{op: "thumb", path, size?}` | `{op: "thumb", path, type, w, h, data}`: Windows' thumbnail, as Explorer shows it (photos, videos, PDFs, documents), fitting in `size` × `size` (default 256, 16 to 1024): `type` is `"jpeg"` or `"png"` (when it has see-through parts), and `data` is base64. With no thumbnail (a file Windows only has an icon for), `data` is null: draw your own icon. |
+
+- **A drive**: `{path: "C:\\", name: "Local Disk (C:)", label, kind, ready, format, total, free}`. `kind` is `fixed`,
+  `removable`, `network`, `cd`, `ram` or `other`. A shared drive that isn't there now (a USB drive unplugged) has
+  `ready: false` and no sizes. `free` is the space free for the server's Windows user.
+- **An entry**: `{name, dir, size, modified, created}`, plus `hidden`, `system`, `readonly`, `link` and `online` only
+  when they're true. Times are milliseconds since 1970 (UTC). `size` is for files only. `online` means the file is in
+  the cloud (OneDrive and the like): reading it fetches it first, so it may be slow. Hide `hidden` and `system`
+  entries unless the user asks to see them.
+- **Paths** are Windows' full paths (`C:\Users\…`; `/` works too, and `C:` means `C:\`). Build a child's path
+  from the folder's `path` and the entry's `name`. A path is refused when it isn't on a shared drive, or a link or
+  junction along it leads off them, or it's a network (`\\server\…`) or device path, or it names a stream
+  (`file:stream`).
+- **Reading a file**: ask for pieces, with up to four asked at once, so a big file never queues up on the server. A
+  file shorter than 1 MB comes in one `read` with `length: 1048576`. For a preview, read only the start. To play a
+  video, read the pieces the player asks for (any `offset`). If `size` or `modified` changes between pieces, the file
+  changed while you read it: start again.
+- **Errors**: *Only admins can browse files on this server*, *That isn't on a shared drive*, *That leads off the
+  shared drives*, *It isn't there any more*, *Windows didn't allow that (access denied)*, *That's a folder, not a
+  file*, and Windows' own message for anything else (a file locked by another program).

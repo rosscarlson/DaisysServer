@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The files module: clients browse and read this PC's shared drives (read-only), with Windows' thumbnails. -->
+</Project>

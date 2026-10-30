@@ -35,6 +35,9 @@ public interface IServerModule : IDisposable
     /// <summary>Its page in the server's window (a tab of its own), or null for none.</summary>
     FrameworkElement? View { get; }
 
+    /// <summary>Its card in the server's Settings (after Modules), or null for none. Settings save as they change.</summary>
+    FrameworkElement? SettingsView => null;
+
     /// <summary>A user was deleted, or their password reset (their data can't be opened any more): forget it.</summary>
     void UserRemoved(ServerUser user);
 }

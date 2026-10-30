@@ -1,6 +1,6 @@
 # Daisy's Server
 
-**Version 0.1.0**
+**Version 0.1.1**
 
 A central server for Daisy's App's clients: Daisy's App on your PCs, Daisy's App Mobile, and whatever comes next. Their
 modules keep data on it and talk to each other through it, live, over the internet as well as at home.
@@ -14,8 +14,11 @@ modules keep data on it and talk to each other through it, live, over the intern
 - **Modular**, like Daisy's App. Each feature is a module (`modules\<Name>\`) that the server hands its clients'
   calls to. A client says which of the server's modules it wants, and from which of its own. Either side can switch a
   module off.
-- **First module: Notepad.** Daisy's App's Tools → Notepad notes, in named tabs, for each user. Typed on any of their
-  clients, they show on all of them at once.
+- **Notepad.** Daisy's App's Tools → Notepad notes, in named tabs, for each user. Typed on any of their clients, they
+  show on all of them at once.
+- **Files** (since 0.1.1). This PC's drives, the ones you pick in **Settings → Shared drives**, for a client (Daisy's
+  App Mobile) to browse, preview and open. Read-only: nothing on them can be changed, moved or deleted from a client.
+  Admins only, unless you tick **Basic users too**.
 - **A window, not a service.** It runs in the tray, starts with Windows if you like, and updates itself.
 
 The protocol is in [PROTOCOL.md](PROTOCOL.md).
@@ -43,6 +46,7 @@ SmartScreen may warn you: choose **More info → Run anyway**. Everything it nee
 4. **In Daisy's App** (3.26.5 or later): Settings → General → **Daisy's Server**. Fill in the address, port, token,
    user and password, then **Connect**. Tools → Notepad then keeps its notes here; the tabs you already had go up to
    the server the first time.
+5. **Files**: tick the drives clients may browse in **Settings → Shared drives**. None are shared until you do.
 
 ## The window
 
@@ -51,9 +55,9 @@ SmartScreen may warn you: choose **More info → Run anyway**. Everything it nee
 | **Status** | Listening or not (**Start** / **Stop**), the addresses clients use, the steps to get going while there are no users or tokens yet, and who's connected: client, user, address, app, the modules it's using, and since when. |
 | **Users** | Add a user (name, password, admin). For each one: **Make admin / Make basic**, **New password…** (which deletes their data), and **Delete** (a two-click **Confirm?**). |
 | **Tokens** | **Make token** (named for who it's for), **Copy**, and **Revoke** (**Confirm?**). |
-| *a tab per module* | **Notepad**: each user's notes as kept (how many, their size, the changes since the last snapshot, when last changed) and the clients they're joined from. What the notes say isn't shown, because the server can't read it. |
+| *a tab per module* | **Notepad**: each user's notes as kept (how many, their size, the changes since the last snapshot, when last changed) and the clients they're joined from. What the notes say isn't shown, because the server can't read it. (**Files** has no tab: its settings are in Settings, and the **Log** shows each file opened.) |
 | **Log** | The server's and its modules' log, live. **Open folder** opens the files. |
-| **Settings** | **Server**: the name clients see, the port, and listening at start. **Startup and tray**: start with Windows (in the tray), and keep running in the tray when the window closes. **Updates**: the version, check when it starts, **Check for updates**, and **Release notes**. **Modules**: each one on or off, from the next start (**Restart now**). **Files**: the folders below. |
+| **Settings** | **Server**: the name clients see, the port, and listening at start. **Startup and tray**: start with Windows (in the tray), and keep running in the tray when the window closes. **Updates**: the version, check when it starts, **Check for updates**, and **Release notes**. **Modules**: each one on or off, from the next start (**Restart now**). **Shared drives (Files)**: a box for each drive (with its free space), ticked to share it, and **Basic users too**. **Folders**: the folders below. |
 
 Closing the window keeps it running in the tray. Right-click the tray icon for Open, Start / Stop listening, Check for
 updates, or Exit. Only one copy runs at a time: starting it again shows the running one.
@@ -73,7 +77,7 @@ admin approval). The server then starts again on the new version. Its users, tok
 | | |
 |---|---|
 | Program | `C:\Program Files\Daisys Server\DaisysServer.exe`, with each module in `modules\<Name>\` |
-| Settings, users, tokens | `%APPDATA%\DaisysServer\` (`settings.json`, `users.json`, `tokens.json`; tokens' secrets DPAPI-encrypted for your Windows user) |
+| Settings, users, tokens | `%APPDATA%\DaisysServer\` (`settings.json`, `users.json`, `tokens.json`; tokens' secrets DPAPI-encrypted for your Windows user; `files.json`, the shared drives) |
 | Users' data | `%LOCALAPPDATA%\DaisysServer\data\users\<user id>\<module>\` (sealed by the clients) |
 | Logs | `%LOCALAPPDATA%\DaisysServer\logs\`, a file a day, kept 14 days |
 | Start with Windows | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` → `DaisysServer` |
@@ -105,9 +109,11 @@ src/
   Modules/
     Directory.Build.props   makes each folder here a module (DaisysServer.<Name>.dll in modules\<Name>\)
     Notepad/                NotepadModule (the module), Hub (one user's notes and clients), NotepadPage (its tab)
+    Files/                  FilesModule (the module: the questions, paths checked), FilesSettings (files.json),
+                            FilesSettingsView (its card in Settings), Thumbnails (Windows' own)
 installer/DaisysServer.iss  Inno Setup
 tools/
-  TestClient/               a console client: end-to-end checks, `setup` (a test server's user and token), `poke`
+  TestClient/               a console client: end-to-end checks, `setup` (a test server's user, token and shared drive), `poke`
   make_icon.py              draws the icon
 ```
 
@@ -122,9 +128,11 @@ folder's `Directory.Build.props` does the rest). In it, write one class that imp
 - `ServeAsync(channel, ct)`: one client's channel, until it ends. Read with `channel.ReadAsync`, which returns null when
   it's over, and send with `channel.Post`. `channel.User`, `channel.Client` and `channel.From` say who it is.
 - `View`: its tab in the window, built with `Ui` (cards, buttons, Confirm?). Return null for none.
+- `SettingsView` (optional): its card in Settings, after Modules. Settings save as they change.
 - `UserRemoved(user)`: the user was deleted, or their password was reset. Forget them.
 
-Seal anything a user owns on the client, with `ServerChannel.DataKey`. The server should only order, keep and pass
+Seal anything a user owns on the client, with `ServerChannel.DataKey` (Files is the exception: it serves the
+server's own files). The server should only order, keep and pass
 messages on. Add the module's messages to PROTOCOL.md. In Daisy's App, the module opens its channel with Core's
 `ServerLink.OpenAsync("id", "its own id", ct)`.
 

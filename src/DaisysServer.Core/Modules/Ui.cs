@@ -103,8 +103,9 @@ public static class Ui
 
     public static Brush Brush(string key) => (Brush)Application.Current.FindResource(key);
 
-    /// <summary>A size in bytes, as KB or MB.</summary>
-    public static string Size(long bytes) => bytes < 1024 ? $"{bytes} B" : bytes < 1 << 20 ? $"{bytes / 1024.0:0.#} KB" : $"{bytes / 1048576.0:0.#} MB";
+    /// <summary>A size in bytes, as KB, MB, GB or TB.</summary>
+    public static string Size(long bytes) => bytes < 1024 ? $"{bytes} B" : bytes < 1 << 20 ? $"{bytes / 1024.0:0.#} KB"
+        : bytes < 1L << 30 ? $"{bytes / 1048576.0:0.#} MB" : bytes < 1L << 40 ? $"{bytes / 1073741824.0:0.#} GB" : $"{bytes / 1099511627776.0:0.##} TB";
 
     /// <summary>How long ago, briefly.</summary>
     public static string Ago(DateTime? utc)

@@ -1,8 +1,9 @@
 // Tries a server end to end: connects with a token, signs in, opens the notepad channel, adds a note and edits it,
-// checks that a second client sees both, and that a wrong password and a wrong token are turned away.
+// checks that a second client sees both, and that a wrong password and a wrong token are turned away; then the files
+// module (if it's there): roots, list, stat, read in pieces, a thumbnail, and paths off the shared drives refused.
 // Usage: TestClient <host> <port> <token> <user> <password>
 //        TestClient setup <home> <user> <password>   (a test server's users.json and tokens.json in <home>, the
-//        DAISYSSERVER_HOME it runs with; prints the token)
+//        DAISYSSERVER_HOME it runs with, and files.json sharing the drive %TEMP% is on; prints the token)
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using DaisysServer.Protocol;
@@ -27,6 +28,7 @@ if (args is ["setup", var home, var newUser, var newPassword])
         ["Secret"] = Convert.ToBase64String(ProtectedData.Protect(secret, null, DataProtectionScope.CurrentUser)),
     }) };
     File.WriteAllText(Path.Combine(home, "tokens.json"), tokens.ToJsonString());
+    File.WriteAllText(Path.Combine(home, "files.json"), new JsonObject { ["Drives"] = new JsonArray(Path.GetPathRoot(Path.GetTempPath())) }.ToJsonString());
     Console.WriteLine(made);
     return 0;
 }
@@ -131,6 +133,91 @@ await c2.ChangePasswordAsync(password + "-new", password);
 c2.Dispose();
 try { await b.ChangePasswordAsync("not it", "whatever123"); Check(false, "a wrong current password can't change it"); }
 catch (ServerException ex) { Check(true, "a wrong current password can't change it: " + ex.Message); }
+
+if (a.Modules.Contains("files"))
+{
+    var cf = await a.OpenAsync("files", "files");
+    int rid = 0;
+    async Task<JsonObject> Ask(JsonObject q)
+    {
+        int mine = ++rid;
+        q["rid"] = mine;
+        cf.Post(q);
+        using var t = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        while (await cf.ReadAsync(t.Token) is { } m) if ((int?)m["rid"] == mine) return m;
+        throw new Exception("files channel ended: " + cf.Ended);
+    }
+    var roots = (await Ask(new JsonObject { ["op"] = "roots" }))["roots"] as JsonArray ?? new JsonArray();
+    var shared = roots.OfType<JsonObject>().Select(r => ServerClient.Str(r, "path")).ToList();
+    Check(roots.Count > 0, "files: roots " + string.Join(", ", roots.OfType<JsonObject>().Select(r => $"{r["name"]} {r["free"]}/{r["total"]}")));
+    string dir = Path.Combine(Path.GetTempPath(), "DaisysServerFilesTest");
+    Directory.CreateDirectory(Path.Combine(dir, "sub"));
+    var bytes = new byte[300_000];
+    new Random(7).NextBytes(bytes);
+    File.WriteAllBytes(Path.Combine(dir, "data10.bin"), bytes);
+    File.WriteAllBytes(Path.Combine(dir, "data2.bin"), [1, 2, 3]);
+    File.WriteAllText(Path.Combine(dir, "hello.txt"), "hello");
+    var list = await Ask(new JsonObject { ["op"] = "list", ["path"] = dir });
+    var names = (list["items"] as JsonArray)?.OfType<JsonObject>().Select(i => ServerClient.Str(i, "name")).ToList() ?? [];
+    Check(names.SequenceEqual(["sub", "data2.bin", "data10.bin", "hello.txt"]), "files: list, folders first in Explorer's order: " + string.Join(", ", names) + " " + list["message"]);
+    var paged = await Ask(new JsonObject { ["op"] = "list", ["path"] = dir, ["skip"] = 1, ["max"] = 2 });
+    Check((int?)paged["count"] == 4 && (paged["items"] as JsonArray)?.Count == 2, "files: list in pages (count 4, 2 from 1)");
+    var stat = await Ask(new JsonObject { ["op"] = "stat", ["path"] = Path.Combine(dir, "hello.txt") });
+    Check((long?)stat["size"] == 5 && ServerClient.Str(stat, "mime") == "text/plain" && ServerClient.Str(stat, "ext") == ".txt", $"files: stat {stat.ToJsonString()[..Math.Min(160, stat.ToJsonString().Length)]}");
+    var got = new MemoryStream();
+    long offset = 0;
+    bool eof = false;
+    int pieces = 0;
+    while (!eof && pieces < 10)
+    {
+        var r = await Ask(new JsonObject { ["op"] = "read", ["path"] = Path.Combine(dir, "data10.bin"), ["offset"] = offset, ["length"] = 128 * 1024 });
+        var piece = Convert.FromBase64String(ServerClient.Str(r, "data"));
+        got.Write(piece);
+        offset += piece.Length;
+        eof = (bool?)r["eof"] == true;
+        pieces++;
+    }
+    Check(eof && pieces == 3 && got.ToArray().SequenceEqual(bytes), $"files: read 300 KB in {pieces} pieces, the same bytes");
+    var past = await Ask(new JsonObject { ["op"] = "read", ["path"] = Path.Combine(dir, "hello.txt"), ["offset"] = 99 });
+    Check((int?)past["length"] == 0 && (bool?)past["eof"] == true, "files: a read past the end is empty, eof");
+    var folder = await Ask(new JsonObject { ["op"] = "read", ["path"] = dir });
+    Check(ServerClient.Str(folder, "op") == "error", "files: reading a folder: " + folder["message"]);
+    var up = await Ask(new JsonObject { ["op"] = "stat", ["path"] = Path.Combine(dir, "..", "DaisysServerFilesTest", "sub") });
+    Check((bool?)up["dir"] == true, "files: .. in a path is fine on the same drive");
+    string other = DriveInfo.GetDrives().Select(d => d.Name).FirstOrDefault(n => !shared.Contains(n, StringComparer.OrdinalIgnoreCase)) ?? "Q:\\";
+    var off = await Ask(new JsonObject { ["op"] = "list", ["path"] = other });
+    Check(ServerClient.Str(off, "op") == "error", $"files: {other} (not shared) refused: {off["message"]}");
+    foreach (var bad in new[] { @"\\localhost\c$", Path.Combine(dir, "hello.txt") + ":stream", @"relative\path", dir + @"\..\..\..\..\..\..\..\..\" + other })
+    {
+        var r = await Ask(new JsonObject { ["op"] = "list", ["path"] = bad });
+        Check(ServerClient.Str(r, "op") == "error", $"files: {bad} refused: {r["message"]}");
+    }
+    string link = Path.Combine(dir, "link");
+    try
+    {
+        if (!Directory.Exists(link) && other.Length == 3 && Directory.Exists(other)) Directory.CreateSymbolicLink(link, other);
+    }
+    catch
+    {
+        // (a symbolic link needs admin: a junction doesn't)
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd", $"/c mklink /J \"{link}\" \"{other}\"") { UseShellExecute = false, RedirectStandardOutput = true })?.WaitForExit();
+    }
+    if (Directory.Exists(link))
+    {
+        var r = await Ask(new JsonObject { ["op"] = "list", ["path"] = link });
+        Check(ServerClient.Str(r, "op") == "error", $"files: a link to {other} refused: {r["message"]}");
+    }
+    string wallpaper = @"C:\Windows\Web\Wallpaper\Windows\img0.jpg";
+    if (File.Exists(wallpaper) && shared.Contains("C:\\", StringComparer.OrdinalIgnoreCase))
+    {
+        var th = await Ask(new JsonObject { ["op"] = "thumb", ["path"] = wallpaper, ["size"] = 200 });
+        Check(ServerClient.Str(th, "data").Length > 1000 && (int?)th["w"] <= 200, $"files: a thumbnail, {th["type"]} {th["w"]}x{th["h"]}, {ServerClient.Str(th, "data").Length} base64");
+    }
+    var none = await Ask(new JsonObject { ["op"] = "thumb", ["path"] = Path.Combine(dir, "data2.bin") });
+    Check(ServerClient.Str(none, "op") == "thumb" && none["data"] == null, "files: no thumbnail for a .bin: data null");
+    try { Directory.Delete(link); } catch { }
+    try { Directory.Delete(dir, true); } catch { }
+}
 
 a.Dispose();
 b.Dispose();
