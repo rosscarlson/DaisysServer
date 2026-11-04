@@ -22,21 +22,21 @@ Module notes are in each module's own CLAUDE.md (`src/Modules/Notepad/CLAUDE.md`
 
 ## Session notes
 
-**Asked (2026-10-28):** the request is in REQUESTS.md. In short:
-- a central server for DA clients, as a GUI app (not a service);
-- a shared token and an encrypted TCP connection, with the host and port set in the client;
-- basic and admin users, each user's data isolated and encrypted so only clients decrypt it;
-- modular like DA, with calls routed to modules;
-- Notepad first, with named tabs, plus DA's Notepad updated and an Android brief in Downloads;
-- an installer with a daisy server icon, and updates through Settings → Check for updates plus a check-on-launch
-  setting;
-- version 0.1, delivered to Downloads.
+**Asked (2026-10-28, in REQUESTS.md):** a central GUI server for DA clients (token, encrypted TCP, basic/admin
+users with data only clients decrypt, modules), Notepad first with DA's side and an Android brief, an installer and
+updates; 0.1 to Downloads.
 
 **Asked (2026-10-30):** create the repo as 0.1 and commit DA's side (done: DA 3.26.4). Then, in DA: the server's
 settings to Settings → General, no descriptions on that page, Notepad on the server only with no network code of its
 own, publish (done: DA 3.26.5). Then a **Files** module: clients (Android first) browse this PC's drives, the shared ones
 picked in Settings; everything to list, detail, preview and open; a brief for the Android session; publish (done:
 0.1.1, notes in `src/Modules/Files/CLAUDE.md`).
+
+**Asked (2026-11-04):** build the `processes` module from the brief DA's session wrote (in REQUESTS.md): Process
+Analyzer's master database (DA 4.1.0), and say what the client needs changed. Built as 0.1.2, not released or
+committed (not asked); notes in `src/Modules/Processes/CLAUDE.md`. Changed: `src/Modules/Processes/` (new),
+`DaisysServer.sln`, PROTOCOL §6, README (feature, tab, data folder, layout), `src/Directory.Build.props` (0.1.2),
+TestClient (`processes:` checks, `report`). Told the user the client needs nothing.
 
 **Done (both released 2026-10-30, `rosscarlson/DaisysServer`, public; the releases are the updater's source):**
 - 0.1.0: this whole repo (layout in the README). Downloads: `DaisysServer-Android-Brief.md` (the connection and
@@ -64,11 +64,18 @@ picked in Settings; everything to list, detail, preview and open; a brief for th
 - **Default port:** 38900.
 - **Files:** read-only, admins only by default (**Basic users too**), no drive shared until ticked, not sealed (the
   server's own files; encrypted on the connection only), the client pulls pieces of at most 1 MB.
+- **Processes** (the brief's): not sealed, one database for every user, in `data\processes\`. Fleet figures go out
+  with a version of their own once a day. No editing on the server (optional in the brief).
 
 **Where it stands:**
 - **Tested:** TestClient's 32 checks (16 of them Files') pass on 0.1.1's Debug and published builds; Files' Settings
   card on screen. The stored data is ciphertext only. DA 3.26.5: two copies through a test server (tabs up, a poke
   live on both, the server restarted and both back in 5 s), Settings → General on screen.
+- **0.1.2 (Processes):** TestClient's 45 checks pass (13 Processes'); two DA 4.1.0 copies synced through a test
+  server (full on joining, an edit on both in 4 s, catching up after being stopped); the tab on screen. Not tested:
+  Export…/Import…, the daily fleet broadcast.
+- DA test copies for Processes: `%TEMP%\dsedit\make_devp.ps1 -Name … -Token … -Port 38991 -User … -Password …`
+  (Support only, hidden in the tray); `%TEMP%\DaisysDev` is the DA session's copy: leave it alone.
 - **Not tested:** the installer (install, firewall, upgrade, uninstall), the update from 0.1.0 to 0.1.1,
   typing by hand, the Users, Tokens and Settings pages by hand, the internet, admin ops from a client.
 
@@ -76,6 +83,9 @@ picked in Settings; everything to list, detail, preview and open; a brief for th
 - They try 0.1.1 with DA 3.26.5 (untested: typing by hand, the card's Change password and Forget).
 - The Android session builds from the two briefs: the connection and Notepad (the phone's notepad can't reach a PC
   host since DA 3.26.5), then Files. Daisy's App (Windows) has no Files client; not asked.
+- 0.1.2: commit and release when they say (asked them). Told them the client's optional nits: `app` is the Support
+  DLL's version (4.0.0.0), two DA copies on one PC share a PC row, its README could point at PROTOCOL §6, and a
+  database id in `changes` would cover a wiped server growing past a client's version (both sides; not worth it now).
 - Offered: removing DA's now-unused `RemoteChannels` (Core, and the AI module's side of it).
 
 **Releasing:** bump the version (README, `src/Directory.Build.props`), `.\build.ps1`, commit, tag `vX.Y.Z`, push,

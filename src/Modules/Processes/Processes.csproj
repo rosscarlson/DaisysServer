@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The processes module: Daisy's App's Process Analyzer's master database, one for the whole server (not sealed). -->
+</Project>

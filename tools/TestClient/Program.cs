@@ -1,6 +1,7 @@
 // Tries a server end to end: connects with a token, signs in, opens the notepad channel, adds a note and edits it,
 // checks that a second client sees both, and that a wrong password and a wrong token are turned away; then the files
-// module (if it's there): roots, list, stat, read in pieces, a thumbnail, and paths off the shared drives refused.
+// module (if it's there): roots, list, stat, read in pieces, a thumbnail, and paths off the shared drives refused; then the
+// processes module (if it's there): full on joining, reports merged and sent to both clients, catching up, the fleet.
 // Usage: TestClient <host> <port> <token> <user> <password>
 //        TestClient setup <home> <user> <password>   (a test server's users.json and tokens.json in <home>, the
 //        DAISYSSERVER_HOME it runs with, and files.json sharing the drive %TEMP% is on; prints the token)
@@ -62,6 +63,30 @@ if (args is ["poke", var ph, var pp, var pt, var pu, var ppw, var find, var appe
     }
     Console.WriteLine("no note named like " + find);
     return 1;
+}
+if (args is ["report", var rh, var rp, var rt, var ru, var rpw, var rname, var rtitle])
+{
+    // a third PC on the processes module: reports a reviewed entry (as a person's classification) and prints the version
+    var rc = await ServerClient.ConnectAsync(rh, int.Parse(rp), rt, ru, rpw, "TestClient-Report", "TestClient", default);
+    var ch = await rc.OpenAsync("processes", "ProcessAnalyzer");
+    ch.Post(new JsonObject { ["op"] = "join", ["version"] = 0, ["app"] = "TestClient" });
+    ch.Post(new JsonObject { ["op"] = "report", ["entries"] = new JsonArray(new JsonObject
+    {
+        ["name"] = rname, ["title"] = rtitle, ["publisher"] = "TestClient", ["category"] = "Utility", ["threat"] = "Low",
+        ["necessity"] = "Optional", ["resource"] = "Light", ["source"] = "user", ["reviewed"] = true,
+        ["updated"] = DateTime.UtcNow.ToString("O"), ["by"] = "TestClient-Report",
+    }) });
+    using var wait = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+    int seen = 0;
+    while (await ch.ReadAsync(wait.Token) is { } m)
+        if (ServerClient.Str(m, "op") == "changes" && ++seen == 2)
+        {
+            var e = (m["entries"] as JsonArray)?.OfType<JsonObject>().FirstOrDefault();
+            Console.WriteLine($"reported {e?["name"]}: \"{e?["title"]}\", rev {e?["rev"]}, version {m["version"]}");
+            break;
+        }
+    rc.Dispose();
+    return 0;
 }
 if (args.Length < 5) { Console.WriteLine("TestClient <host> <port> <token> <user> <password>"); return 2; }
 string host = args[0], token = args[2], user = args[3], password = args[4];
@@ -217,6 +242,88 @@ if (a.Modules.Contains("files"))
     Check(ServerClient.Str(none, "op") == "thumb" && none["data"] == null, "files: no thumbnail for a .bin: data null");
     try { Directory.Delete(link); } catch { }
     try { Directory.Delete(dir, true); } catch { }
+}
+
+if (a.Modules.Contains("processes"))
+{
+    // two PCs on the master database: a report reaches both, reviewed beats automatic, catching up, the fleet's figures
+    string x = "testproc" + Guid.NewGuid().ToString("N")[..6];
+    JsonObject Entry(bool reviewed, DateTime updated, string title, JsonObject? extra = null)
+    {
+        var e = new JsonObject
+        {
+            ["name"] = x + ".EXE", ["title"] = title, ["publisher"] = "Test", ["category"] = "Utility", ["threat"] = "Safe",
+            ["necessity"] = "Optional", ["resource"] = "Light", ["source"] = reviewed ? "user" : "auto", ["reviewed"] = reviewed,
+            ["updated"] = updated.ToString("O"), ["by"] = "TestClient", ["rev"] = 999999,
+        };
+        foreach (var (k, v) in extra ?? new JsonObject()) e[k] = v?.DeepClone();
+        return e;
+    }
+    JsonObject? Of(JsonObject changes) => (changes["entries"] as JsonArray)?.OfType<JsonObject>().FirstOrDefault(e => ServerClient.Str(e, "name") == x);
+    async Task<ServerChannel> Join(ServerClient sc, long version)
+    {
+        var ch = await sc.OpenAsync("processes", "ProcessAnalyzer");
+        ch.Post(new JsonObject { ["op"] = "join", ["version"] = version, ["app"] = "TestClient" });
+        return ch;
+    }
+    var pa = await Join(a, 0);
+    var first = await Next(pa, "changes");
+    long v0 = (long)first["version"]!;
+    Check((bool?)first["full"] == true, $"processes: a new client gets everything (full, version {v0}, {(first["entries"] as JsonArray)?.Count} entries)");
+    var clientsMsg = await Next(pa, "clients");
+    Check(clientsMsg["clients"] is JsonArray, "processes: clients after join");
+    pa.Post(new JsonObject { ["op"] = "seen", ["version"] = v0 });
+    var pb = await Join(b, v0);
+    var bFirst = await Next(pb, "changes");
+    Check(v0 == 0 ? (bool?)bFirst["full"] == true : (bool?)bFirst["full"] == false && (bFirst["entries"] as JsonArray)?.Count == 0,
+        v0 == 0 ? "processes: version 0 always gets everything" : "processes: a client up to date gets nothing (full false)");
+    await Next(pb, "clients");
+
+    var t0 = DateTime.UtcNow.AddMinutes(-10);
+    pa.Post(new JsonObject { ["op"] = "report", ["entries"] = new JsonArray(Entry(false, t0, "Auto", new JsonObject { ["futureField"] = 7, ["fleetCpu"] = 99.0 })) });
+    var ackA = await Next(pa, "changes");
+    var gotB = await Next(pb, "changes");
+    var ea = Of(ackA);
+    Check((long?)ackA["version"] == v0 + 1 && (long?)ea?["rev"] == v0 + 1 && Of(gotB) != null, $"processes: a report is numbered (rev {ea?["rev"]}) and reaches the other client");
+    Check((int?)ea?["futureField"] == 7 && ea?["fleetCpu"] == null && ServerClient.Str(ea!, "name") == x, "processes: unknown fields kept, a client's fleet figures dropped, the name keyed");
+
+    pa.Post(new JsonObject { ["op"] = "report", ["entries"] = new JsonArray(Entry(false, t0, "Same time")) });
+    var tie = await Next(pa, "changes");
+    Check((long?)tie["version"] == v0 + 1 && ServerClient.Str(Of(tie)!, "title") == "Auto", "processes: a tie keeps the stored one, answered with it (no new version)");
+
+    pb.Post(new JsonObject { ["op"] = "report", ["entries"] = new JsonArray(Entry(true, t0.AddMinutes(1), "Reviewed")) });
+    await Next(pb, "changes");
+    var revA = await Next(pa, "changes");
+    Check(ServerClient.Str(Of(revA)!, "title") == "Reviewed" && (long?)revA["version"] == v0 + 2, "processes: a reviewed entry replaces an automatic one");
+    pa.Post(new JsonObject { ["op"] = "report", ["entries"] = new JsonArray(Entry(false, DateTime.UtcNow, "Newer auto")) });
+    var keep = await Next(pa, "changes");
+    Check(ServerClient.Str(Of(keep)!, "title") == "Reviewed" && (long?)keep["version"] == v0 + 2, "processes: a newer automatic one doesn't replace a reviewed one");
+    pa.Post(new JsonObject { ["op"] = "seen", ["version"] = v0 + 2 });
+
+    var pc = await Join(a, v0 + 1);
+    var catchUp = await Next(pc, "changes");
+    Check((bool?)catchUp["full"] == false && (catchUp["entries"] as JsonArray)!.Count >= 1 && ServerClient.Str(Of(catchUp)!, "title") == "Reviewed",
+        $"processes: a client behind catches up ({(catchUp["entries"] as JsonArray)!.Count} since {v0 + 1})");
+    var pcClients = await Next(pc, "clients");
+    Check((pcClients["clients"] as JsonArray)!.OfType<JsonObject>().Any(k => ServerClient.Str(k, "name") == "TestClient-A" && (long?)k["version"] == v0 + 2),
+        "processes: seen kept (TestClient-A at the latest)");
+    pc.Dispose();
+    var other = await Join(a, v0 + 1000);
+    Check((bool?)(await Next(other, "changes"))["full"] == true, "processes: a version past the server's (another server's) gets everything");
+    other.Dispose();
+
+    JsonObject Usage(double cpu, double mem) => new() { ["op"] = "usage", ["items"] = new JsonArray(new JsonObject
+        { ["name"] = x, ["cpu"] = cpu, ["peakCpu"] = cpu * 3, ["memoryMB"] = mem, ["peakMemoryMB"] = mem * 2, ["samples"] = 50 }) };
+    pa.Post(Usage(2, 100));
+    pb.Post(Usage(4, 300));
+    await Task.Delay(500);
+    var fleet = await Join(a, 0);
+    var fe = Of(await Next(fleet, "changes"));
+    Check((double?)fe?["fleetCpu"] == 3 && (double?)fe?["fleetMemoryMB"] == 200 && (int?)fe?["fleetPcs"] == 2,
+        $"processes: the fleet's figures averaged over the PCs (cpu {fe?["fleetCpu"]}, memory {fe?["fleetMemoryMB"]}, PCs {fe?["fleetPcs"]})");
+    fleet.Dispose();
+    pa.Dispose();
+    pb.Dispose();
 }
 
 a.Dispose();

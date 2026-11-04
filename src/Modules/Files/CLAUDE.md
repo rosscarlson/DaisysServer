@@ -28,5 +28,7 @@ Came in 0.1.1. Messages: PROTOCOL.md §5. Android's side: `Downloads\DaisysServe
 read in three pieces, past the end, a folder refused, `..`, an unshared drive, UNC, a stream, a relative path, a
 junction to an unshared drive, a JPEG thumbnail, no thumbnail for `.bin`. The Settings card on screen.
 
+**Not done:** its `Icon` in `[ServerModule]` is an empty string (told the user, 2026-11-04; not fixed).
+
 **Not tested:** a basic user refused; PNG (see-through) thumbnails; videos' and PDFs' thumbnails; a network drive
 that's gone; OneDrive placeholders; a hung thumbnail handler (the 15 s replacement thread).

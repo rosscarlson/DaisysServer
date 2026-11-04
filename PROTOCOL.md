@@ -5,7 +5,8 @@ description of it.** The code is `src/DaisysServer.Core/Protocol/` (`Wire.cs`, `
 into Daisy's App's `src/DaisysApp.Core/Server/`. A change to either copy goes into both.
 
 Version 1 (Daisy's Server 0.1.0, Daisy's App 3.26.4; its settings in Settings → General since 3.26.5). The `files`
-module (§5) came in Daisy's Server 0.1.1, still version 1: a server without it says so when it's opened.
+module (§5) came in Daisy's Server 0.1.1 and the `processes` module (§6) in 0.1.2, still version 1: a server without
+one says so when it's opened.
 
 ## 1. Connecting
 
@@ -211,3 +212,49 @@ answers can come in any order: match them by `rid`.
 - **Errors**: *Only admins can browse files on this server*, *That isn't on a shared drive*, *That leads off the
   shared drives*, *It isn't there any more*, *Windows didn't allow that (access denied)*, *That's a folder, not a
   file*, and Windows' own message for anything else (a file locked by another program).
+
+## 6. The `processes` module (since 0.1.2)
+
+Daisy's App's Support → Process Analyzer's **master database** of known programs (threat, whether it's needed,
+expected use, publisher, the folders it belongs in). Every client sends its changes up and gets everyone else's; a new
+client takes the server's database over its own. Daisy's App's side is `ServerSync.cs` in its
+`src/Modules/Support/ProcessAnalyzer/` (`from`: `ProcessAnalyzer`).
+
+**Not sealed, and one for the whole server.** The entries are programs' names and classifications, not users' data,
+and the server reads them to merge them (asked for on 2026-11-04). Every user shares the same database, kept in
+`%LOCALAPPDATA%\DaisysServer\data\processes\` (`processes.json`, and `clients.json`: the PCs).
+
+The database has a **version** (a number): each change bumps it, and every entry changed then gets `rev` = that version.
+
+| From | Message |
+|---|---|
+| a client | `{op: "join", version, app}`: the version it has every change up to (0: none). Then: |
+| | `{op: "seen", version}`: it has applied up to `version` (the server shows which PCs are behind). |
+| | `{op: "report", entries: [entry]}`: entries made or changed there (up to 200 a message; the server takes up to 1000). |
+| | `{op: "usage", items: [{name, cpu, peakCpu, memoryMB, peakMemoryMB, samples}]}`: that PC's figures (hourly). |
+| the server | `{op: "changes", version, full, entries: [entry]}`: `version` is the server's now. |
+| | `{op: "clients", clients: [{name, version, lastSeen}]}`: the PCs it knows, after `join`. |
+| | `{op: "error", message}` |
+
+- **Joining:** the answer is `changes` with every entry whose `rev` is past the client's `version`, `full: false`. When
+  `version` is 0, or past the server's own (it synced with another server, or this one's database was started again),
+  it's **every** entry, `full: true`. Then `clients`.
+- **A report:** each entry is merged (below). If any changed, the version goes up once for the message, and `changes`
+  with the changed ones goes to **every** joined client, the sender too: that's its acknowledgement, and the sender's
+  copy also carries the server's version of the entries it sent that didn't change. If none changed, only the sender
+  gets `changes`, with the server's copies of what it sent and the same version, so it stops sending them.
+- **The merge**, for an entry with the same `name` as one kept: none kept, it's taken; else when `reviewed` differs,
+  the reviewed one wins (an automatic classification never replaces a person's); else the newer `updated` wins (a tie
+  keeps the one kept). The entry taken replaces the kept one whole. A client's `rev` and `fleet*` are ignored.
+- **Usage:** the server keeps each PC's latest figures for each program (for 30 days) and puts the averages over the
+  PCs on the entry: `fleetCpu`, `fleetMemoryMB`, `fleetPcs`. They go out with any change to the entry, and once a day
+  the entries whose figures changed get a new version of their own.
+- **An entry** (Daisy's App's `KnownProcess`, camelCase): `{name, title, publisher, category, threat, necessity,
+  resource, description, paths, source, reviewed, updated, by, rev, sha256?, vtMalicious?, vtEngines?, vtChecked?,
+  fleetCpu?, fleetMemoryMB?, fleetPcs?}`. `name` is the key: the program's file name, lower case, without `.exe` (the
+  server makes it so). `threat` is Safe, Low, Medium, High or Dangerous; `necessity` Required, Recommended, Optional,
+  Unnecessary or Unknown; `resource` Light, Moderate or Heavy. `updated` is ISO 8601, UTC. Fields the server doesn't
+  know are kept as they came, so newer clients' fields survive.
+- **Export and import** (the server's Processes tab) use Daisy's App's export file:
+  `{format: "DaisysApp.Processes", formatVersion: 1, exported, client, serverVersion, entries}`. An import is merged
+  by the same rules, as one new version, and sent to every client.

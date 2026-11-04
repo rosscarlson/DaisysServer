@@ -66,3 +66,104 @@ Let's move the settings for DS out of the Tools -> Notepad settings page and put
 Also on that page, Settings/General remove ALL descriptive text - leave the names of the options but all the sentences you added explaining each thing, remove all that, I know what all this is. Also remove the feature in the current Notepad allowing it to connect to anything other than the server - any network code that's in the notepad app should be removed, it should all be in DA Core's API so that all apps can use our connection to the server.
 
 Publish as next subversion when ready
+
+New Module - "Files" - this will allow a remote client, be it Android, etc. to browse the filesystem of the machine that the server is running on. In the settings of the server app we should be able to select the drives that are being shared. It'll need to send those directory listings, file details, etc. - everything the remote app will need to get the details, preview and then open and display the file (we'll handle that client side for common types). Please update the server as necessary and write me a brief I can give to the other session that's creating the Android client. Publish as next subversion when ready
+
+clarify: "**Not encrypted with the user's own key" -** I don't want the files encrypted I just want the connection between the client and server encrypted, is that how it works?
+
+is the server ready for the files client? just answer, no code
+
+give me the details to give to the agent coding that for Android
+
+## 2026-11-04
+
+we're adding a new module that the client has been build for - here is the brief it made for what it needs, build this into Daisy Server and let me know what if anything you need changed/added on the client to make this work:
+
+---
+
+# Brief: Daisy's Server `processes` module (Process Analyzer's master database)
+
+**Repo:** `D:\OneDrive\Code\Windows\DaisysServer` (read its CLAUDE.md, PROTOCOL.md and the Notepad/Files modules first).
+**Client (done, Daisy's App 4.1.0):** `D:\OneDrive\Code\Windows\DaisysApp\src\Modules\Support\ProcessAnalyzer\`:
+`ServerSync.cs` (the channel), `ProcessDb.cs` (the entry, `KnownProcess`, and the client's merge), README.md
+("Daisy's Server" section: the same protocol as below).
+
+## What it's for
+
+Daisy's App's Support → Process Analyzer checks every running program against a database of known programs (threat,
+whether it's needed, expected resource use, publisher, folders it belongs in). Each client classifies programs it
+doesn't know and users classify them by hand. The server holds the **master database**: every client sends its
+changes up and gets everyone else's, and a new client takes the server's database over its own.
+
+## Rules for this module (a deliberate exception)
+
+- **Not sealed.** The entries are programs' names and classifications, not user data, and the server has to read and
+  merge them (the user asked for this on 2026-11-04). Store them in plain JSON.
+- **One database for the whole server**, shared by all users (not per user): e.g.
+  `%LOCALAPPDATA%\DaisysServer\data\processes\processes.json` (plus a per-client table). Not under `users\<id>`.
+- A server **version** number (a long) counts changes: every entry changed gets `rev` = the new version.
+- Add the module to PROTOCOL.md as section 6 (the `processes` module, "since 0.x"), and to the server's module list
+  (switch on/off like the others).
+
+## The channel
+
+The client opens `{"op":"open","module":"processes","from":"ProcessAnalyzer"}`. Messages inside `msg` (JSON, camelCase):
+
+| From | Message | Server does |
+|---|---|---|
+| client | `{op:"join", version, app}` | Record the client (its client name from the connection, the user, `app`, last seen). Answer `changes` with every entry whose `rev > version`, `full: false`; if `version` is 0, or older than anything you can answer from (you dropped history), or greater than the server's own version (another server's), send **every** entry with `full: true`. Also send `clients` (optional). |
+| server | `{op:"changes", version, full, entries:[…]}` | `version` = the server's current version. |
+| client | `{op:"seen", version}` | Store that client's version (for the server UI: which PCs are behind). |
+| client | `{op:"report", entries:[…]}` (≤200 per message, several may come) | Merge each entry (below). If any changed: bump the version once for the message, set each changed entry's `rev` to it, save, and send `{op:"changes", version, full:false, entries:[the changed ones]}` to **every** open `processes` channel, the sender too (the sender uses it as the acknowledgement). If nothing changed, still answer the sender with `changes` carrying the server's current versions of the entries it sent (so it stops resending). |
+| client | `{op:"usage", items:[{name, cpu, peakCpu, memoryMB, peakMemoryMB, samples}]}` (hourly) | Keep the latest per (client, name). For each name, `fleetCpu` = average of clients' `cpu`, `fleetMemoryMB` likewise, `fleetPcs` = number of clients. Put those on the entry; they may ride along with the next `changes` (no version bump needed just for them, or bump daily). |
+| server | `{op:"clients", clients:[{name, version, lastSeen}]}` | Optional, after join. |
+| server | `{op:"error", message}` | A problem worded for the user. |
+
+## An entry (`KnownProcess`)
+
+```json
+{ "name": "chrome", "title": "Google Chrome", "publisher": "Google", "category": "Browser",
+  "threat": "Safe", "necessity": "Optional", "resource": "Heavy", "description": "…",
+  "paths": ["%ProgramFiles%\\Google"], "source": "user", "reviewed": true,
+  "updated": "2026-11-04T22:10:21Z", "by": "GAMER11", "rev": 42,
+  "sha256": "…", "vtMalicious": 0, "vtEngines": 72, "vtChecked": "…",
+  "fleetCpu": 3.1, "fleetMemoryMB": 820, "fleetPcs": 4 }
+```
+
+- `name` is the key: the exe's name, lower case, without `.exe`.
+- Enums are strings: `threat` Safe|Low|Medium|High|Dangerous; `necessity` Required|Recommended|Optional|Unnecessary|Unknown;
+  `resource` Light|Moderate|Heavy. `publisher` may hold alternatives split by `|`.
+- `source`: seed | auto | user | import | server (clients set it; keep what they send, or set "server" on your copy,
+  either works). Clients never send their built-in `seed` entries unless changed.
+- Keep unknown fields you receive (store the JSON object, not only the known properties), so newer clients' fields
+  survive.
+
+## The merge (the same as the client's)
+
+For an incoming entry vs the stored one with the same name:
+1. none stored → take it;
+2. `reviewed` differs → the reviewed one wins (an automatic classification never replaces a person's);
+3. otherwise the newer `updated` wins (ties: keep the stored one).
+
+The `fleet*` fields are the server's own: don't take them from clients.
+
+## Server UI (keep it small: labels, short tooltips)
+
+A **Processes** page: entries (name, title, threat, needed, by, updated, rev), search, the PCs (name, user, version,
+last seen, "behind" when their version < the server's), the database version, **Export…** (the same file as the
+client's: `{format:"DaisysApp.Processes", formatVersion:1, exported, client, serverVersion, entries}`) and
+**Import…** (merge with the rules above, bump the version, push `changes`). Editing an entry on the server is optional
+(an edit = a reviewed entry, `by` = the server's name).
+
+## Testing
+
+As the server's CLAUDE.md says: `DAISYSSERVER_HOME=%TEMP%\DaisysServerTest`, `TestClient setup`; a DA copy with the
+Support module (`%TEMP%\DaisysDev` has it; its settings in `%APPDATA%\DaisysDev\DaisysServer.json`). On the client,
+Settings → Support → Process Analyzer shows the sync status, the database version and the changes waiting to be sent.
+Check: a new client gets the whole database (`full`), an edit on one client shows on another within seconds, a
+client offline while edits happen catches up on join, a reviewed entry isn't overwritten by an automatic one. Never
+stop DaisysApp.exe.
+
+## 2026-11-04
+
+yes, release
