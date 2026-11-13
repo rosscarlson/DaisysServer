@@ -1,6 +1,6 @@
 # Daisy's Server
 
-**Version 0.1.2**
+**Version 0.2.0**
 
 A central server for Daisy's App's clients: Daisy's App on your PCs, Daisy's App Mobile, and whatever comes next. Their
 modules keep data on it and talk to each other through it, live, over the internet as well as at home.
@@ -22,6 +22,10 @@ modules keep data on it and talk to each other through it, live, over the intern
 - **Processes** (since 0.1.2). The master database for Daisy's App's Support → Process Analyzer: the programs its
   clients know and how they're classified. Each client sends its changes and gets everyone else's. One database for
   every user, and not sealed (programs' names and classifications aren't anyone's data, and the server merges them).
+- **Sessions** (since 0.2.0). Daisy's App's SimEffects → Analysis → Share Session (4.17.0 or later): racing sessions
+  shared for every user to browse, download and compare. Not sealed (everyone reads them). On the **Sessions** tab an
+  admin finds sessions, removes them one at a time or many at once, and bans whoever shared one from sharing again
+  (their user, PC, address or token), which removes all of theirs.
 - **A window, not a service.** It runs in the tray, starts with Windows if you like, and updates itself.
 
 The protocol is in [PROTOCOL.md](PROTOCOL.md).
@@ -44,6 +48,7 @@ SmartScreen may warn you: choose **More info → Run anyway**. Everything it nee
 3. **Reaching it**:
    - At home: clients use this PC's address (shown on **Status**) and the port (38900 unless you change it in
      **Settings**).
+   - Windows Firewall: the installer lets the server through (a rule for the program, whatever port it's on).
    - From the internet: forward that TCP port on your router to this PC, and use your public address (**Show public
      address** on Status) or a DNS name for it.
 4. **In Daisy's App** (3.26.5 or later): Settings → General → **Daisy's Server**. Fill in the address, port, token,
@@ -58,7 +63,7 @@ SmartScreen may warn you: choose **More info → Run anyway**. Everything it nee
 | **Status** | Listening or not (**Start** / **Stop**), the addresses clients use, the steps to get going while there are no users or tokens yet, and who's connected: client, user, address, app, the modules it's using, and since when. |
 | **Users** | Add a user (name, password, admin). For each one: **Make admin / Make basic**, **New password…** (which deletes their data), and **Delete** (a two-click **Confirm?**). |
 | **Tokens** | **Make token** (named for who it's for), **Copy**, and **Revoke** (**Confirm?**). |
-| *a tab per module* | **Notepad**: each user's notes as kept (how many, their size, the changes since the last snapshot, when last changed) and the clients they're joined from. What the notes say isn't shown, because the server can't read it. **Processes**: the database's version, **Export…** and **Import…** (Daisy's App's export file; an import goes to every PC), the PCs (behind or up to date), and every program, with a search. (**Files** has no tab: its settings are in Settings, and the **Log** shows each file opened.) |
+| *a tab per module* | **Notepad**: each user's notes as kept (how many, their size, the changes since the last snapshot, when last changed) and the clients they're joined from. What the notes say isn't shown, because the server can't read it. **Processes**: the database's version, **Export…** and **Import…** (Daisy's App's export file; an import goes to every PC), the PCs (behind or up to date), and every program, with a search. **Sessions**: every session shared (when, title, driver, game, track, car, class, laps, best, user, PC, address, token, size, video) with their count and total size, a **Search** that looks for each word anywhere in a row, and, for the sessions picked (Ctrl+click or Shift+click for many): **Remove**, **Ban user**, **Ban PC**, **Ban address**, **Ban token** (each **Confirm?**; a ban removes every session it matches). Under it, **Banned from sharing**: each ban with **Unban**, and a box to ban a user, PC or address (or a range, like `203.0.113.0/24`) by hand. Someone banned can still browse and download. (**Files** has no tab: its settings are in Settings, and the **Log** shows each file opened.) |
 | **Log** | The server's and its modules' log, live. **Open folder** opens the files. |
 | **Settings** | **Server**: the name clients see, the port, and listening at start. **Startup and tray**: start with Windows (in the tray), and keep running in the tray when the window closes. **Updates**: the version, check when it starts, **Check for updates**, and **Release notes**. **Modules**: each one on or off, from the next start (**Restart now**). **Shared drives (Files)**: a box for each drive (with its free space), ticked to share it, and **Basic users too**. **Folders**: the folders below. |
 
@@ -83,6 +88,7 @@ admin approval). The server then starts again on the new version. Its users, tok
 | Settings, users, tokens | `%APPDATA%\DaisysServer\` (`settings.json`, `users.json`, `tokens.json`; tokens' secrets DPAPI-encrypted for your Windows user; `files.json`, the shared drives) |
 | Users' data | `%LOCALAPPDATA%\DaisysServer\data\users\<user id>\<module>\` (sealed by the clients) |
 | Process database | `%LOCALAPPDATA%\DaisysServer\data\processes\` (`processes.json`, `clients.json`: one for everyone, not sealed) |
+| Shared sessions | `%LOCALAPPDATA%\DaisysServer\data\sessions\` (`sessions.json`, a `<id>.gz` each, `bans.json`: one for everyone, not sealed) |
 | Logs | `%LOCALAPPDATA%\DaisysServer\logs\`, a file a day, kept 14 days |
 | Start with Windows | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` → `DaisysServer` |
 | Firewall | the rule *Daisy's Server* (made by the installer, removed by the uninstaller) |
@@ -116,9 +122,11 @@ src/
     Files/                  FilesModule (the module: the questions, paths checked), FilesSettings (files.json),
                             FilesSettingsView (its card in Settings), Thumbnails (Windows' own)
     Processes/              ProcessesModule (the module), ProcessDatabase (entries, merge, PCs, usage), ProcessesPage
+    Sessions/               SessionsModule (the module: its questions), SessionStore (index, files, uploads, bans,
+                            pushes), SessionsPage (its tab: search, remove, ban)
 installer/DaisysServer.iss  Inno Setup
 tools/
-  TestClient/               a console client: end-to-end checks, `setup` (a test server's user, token and shared drive), `poke`, `report` (a processes entry)
+  TestClient/               a console client: end-to-end checks, `setup` (a test server's user, token and shared drive), `poke`, `report` (a processes entry), `share` (a session, from a PC you name)
   make_icon.py              draws the icon
 ```
 
@@ -131,13 +139,14 @@ folder's `Directory.Build.props` does the rest). In it, write one class that imp
 - `Start(host)`: once, at start. `host` gives it its log (`host.Log`), a folder per user (`host.FolderFor(user)`), and
   the users.
 - `ServeAsync(channel, ct)`: one client's channel, until it ends. Read with `channel.ReadAsync`, which returns null when
-  it's over, and send with `channel.Post`. `channel.User`, `channel.Client` and `channel.From` say who it is.
+  it's over, and send with `channel.Post`. `channel.User`, `channel.Client` and `channel.From` say who it is (and since 0.2.0 `channel.Address`,
+  `TokenId` and `TokenName` where it came from).
 - `View`: its tab in the window, built with `Ui` (cards, buttons, Confirm?). Return null for none.
 - `SettingsView` (optional): its card in Settings, after Modules. Settings save as they change.
 - `UserRemoved(user)`: the user was deleted, or their password was reset. Forget them.
 
 Seal anything a user owns on the client, with `ServerChannel.DataKey` (Files serves the server's own files, and
-Processes keeps one database of programs for everyone: those two aren't sealed). The server should only order, keep and pass
+Processes and Sessions keep what everyone shares: those three aren't sealed). The server should only order, keep and pass
 messages on. Add the module's messages to PROTOCOL.md. In Daisy's App, the module opens its channel with Core's
 `ServerLink.OpenAsync("id", "its own id", ct)`.
 

@@ -5,7 +5,7 @@
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>0.1.2</Version>
+    <Version>0.2.0</Version>
     <Product>Daisy's Server</Product>
     <Company>rosscarlson</Company>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>

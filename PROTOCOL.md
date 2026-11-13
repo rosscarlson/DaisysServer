@@ -124,7 +124,9 @@ The server hands each channel to the module named in `open`, along with:
 
 - the signed-in user,
 - the client's name,
-- `from`.
+- `from`,
+- (since 0.2.0) the connection's IP address and token (for the `sessions` module's record of who shared what, and its
+  bans).
 
 Each user's data is kept apart, in `%LOCALAPPDATA%\DaisysServer\data\users\<user id>\<module>\`. A module switched off
 on the server isn't loaded at all.
@@ -258,3 +260,45 @@ The database has a **version** (a number): each change bumps it, and every entry
 - **Export and import** (the server's Processes tab) use Daisy's App's export file:
   `{format: "DaisysApp.Processes", formatVersion: 1, exported, client, serverVersion, entries}`. An import is merged
   by the same rules, as one new version, and sent to every client.
+
+## 7. The `sessions` module (since 0.2.0)
+
+Daisy's App's SimEffects → Analysis → **Share Session** (4.17.0): racing sessions (telemetry logs) shared on the
+server, listed and downloaded by every user of it. Daisy's App's side is `SessionShares.cs` (`SessionServer`) in its
+`src/Modules/SimEffects/Analysis/Sessions/` (`from`: `Analysis`).
+
+**Not sealed, and one store for the whole server.** Every user must be able to read what's shared, so sessions aren't
+sealed with anyone's data key: they're readable on the server's disk, in `%LOCALAPPDATA%\DaisysServer\data\sessions\`
+(`sessions.json`, the index; `<id>.gz`, each session's file exactly as it came; `bans.json`). On the way they're as
+safe as everything else: the connection's AES-256-GCM, with keys from an ephemeral ECDH P-256 exchange salted with the
+token's secret.
+
+Every question carries a `rid`. Its answer has the same `op` and `rid`, or is `{op: "error", rid, message}` (worded for
+people). Questions are answered in order.
+
+| Ask | Answer |
+|---|---|
+| `{op: "list"}` | `{op: "list", sessions: [meta]}`: every complete session, newest first. |
+| `{op: "share", meta, size, sha256}` | `{op: "share", id}`: an upload begins. `size` is the gzip file's bytes (up to 200 MB), `sha256` its hash (lower-case hex). It isn't listed until it's complete. |
+| `{op: "put", id, offset, data, eof}` | `{op: "put", id, received}`: one piece, base64, in order (`offset` must be what's been received). With `eof: true` the total must be `size` and the hash must match: then it's kept, and `added` is pushed. Anything wrong drops the upload with an `error`. Uploads without `eof` after 10 minutes, or whose channel closes, are dropped. |
+| `{op: "get", id, offset, length}` | `{op: "get", id, offset, length, size, eof, data}`: up to `length` bytes (at most 1 MB) from `offset`, base64; `length` is how many came. |
+| `{op: "edit", id, title, description, video, videoAt}` | `{op: "edit", session: meta}`, and `changed` pushed. |
+| `{op: "delete", id}` | `{op: "delete", id}`, and `removed` pushed (nothing's pushed for one already gone). |
+
+**Pushes** (no `rid`), to every open `sessions` channel, the sender's too: `{op: "added", session: meta}`,
+`{op: "changed", session: meta}`, `{op: "removed", id}`.
+
+- **meta:** `{id, title, description, driver, game, track, car, class, laps, best, started, video, videoAt, user,
+  client, shared, size, mine}`. The client sends the first thirteen but `id` (fields the server doesn't know are kept
+  as they came); the server sets `id` (16 hex characters), `user` (the sharer's name), `client` (their PC), `shared`
+  (ms since 1970, UTC, when it was completed) and `size`, whatever the client says. `mine` is worked out for each
+  recipient: true when they shared it. `started` is ms since 1970, UTC; `best` seconds (0 for none); `videoAt` seconds
+  or null. `video` must be an `https://` link (anything else is kept as null). Text is clipped (a title to 200
+  characters, a description to 4000).
+- **Who:** any signed-in user can `list`, `get` and `share`. Only the sharer, or an admin, can `edit` or `delete`;
+  anyone else gets *Only the person who shared it can change it.*
+- **Bans** (made on the server's Sessions tab): a banned user, PC (the client's name, any case), IP address or range
+  (`203.0.113.0/24`), or token can't `share` or `edit` (*You can't share sessions on this server.*), but can still
+  `list` and `get`. Banning removes every session that matches it. The server keeps each session's address and token,
+  but never sends them.
+- The `.gz` is a gzip of Daisy's App's session export (UTF-8 CSV). The server doesn't open it.

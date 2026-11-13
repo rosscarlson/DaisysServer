@@ -50,6 +50,10 @@ public interface IModuleChannel : IDisposable
     /// <summary>The client's name (its PC or device), and the id of its module on the client side (its "from").</summary>
     string Client { get; }
     string From { get; }
+    /// <summary>(since 0.2.0) The connection's IP address, and the token it came with (its id and name).</summary>
+    string Address => "";
+    string TokenId => "";
+    string TokenName => "";
     /// <summary>Sends a message (queued: they go in order).</summary>
     void Post(JsonNode message);
     /// <summary>The next message, or null when the client has closed the channel or gone.</summary>

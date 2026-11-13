@@ -1,7 +1,8 @@
 // Tries a server end to end: connects with a token, signs in, opens the notepad channel, adds a note and edits it,
 // checks that a second client sees both, and that a wrong password and a wrong token are turned away; then the files
 // module (if it's there): roots, list, stat, read in pieces, a thumbnail, and paths off the shared drives refused; then the
-// processes module (if it's there): full on joining, reports merged and sent to both clients, catching up, the fleet.
+// processes module (if it's there): full on joining, reports merged and sent to both clients, catching up, the fleet; then
+// the sessions module (if it's there): a share in pieces, pushes, download, edit, refusals, a banned PC, delete.
 // Usage: TestClient <host> <port> <token> <user> <password>
 //        TestClient setup <home> <user> <password>   (a test server's users.json and tokens.json in <home>, the
 //        DAISYSSERVER_HOME it runs with, and files.json sharing the drive %TEMP% is on; prints the token)
@@ -15,12 +16,14 @@ if (args is ["setup", var home, var newUser, var newPassword])
     var salt = RandomNumberGenerator.GetBytes(16);
     var vsalt = RandomNumberGenerator.GetBytes(16);
     var auth = Vault.Auth(Vault.Master(newPassword, salt, Vault.Iterations));
-    var users = new JsonObject { ["Users"] = new JsonArray(new JsonObject
+    // the admin, and a basic user with the same password (<user>-basic: someone else, for the sessions module)
+    JsonObject User(string name, bool admin) => new()
     {
-        ["Id"] = "test" + Guid.NewGuid().ToString("N")[..8], ["Name"] = newUser, ["Admin"] = true, ["Salt"] = Convert.ToBase64String(salt),
+        ["Id"] = "test" + Guid.NewGuid().ToString("N")[..8], ["Name"] = name, ["Admin"] = admin, ["Salt"] = Convert.ToBase64String(salt),
         ["Iterations"] = Vault.Iterations, ["VerifierSalt"] = Convert.ToBase64String(vsalt),
         ["Verifier"] = Convert.ToBase64String(Vault.Verifier(auth, vsalt)), ["Created"] = DateTime.UtcNow,
-    }) };
+    };
+    var users = new JsonObject { ["Users"] = new JsonArray(User(newUser, true), User(newUser + "-basic", false)) };
     File.WriteAllText(Path.Combine(home, "users.json"), users.ToJsonString());
     string made = Token.Make(out var tid, out var secret);
     var tokens = new JsonObject { ["Tokens"] = new JsonArray(new JsonObject
@@ -30,6 +33,12 @@ if (args is ["setup", var home, var newUser, var newPassword])
     }) };
     File.WriteAllText(Path.Combine(home, "tokens.json"), tokens.ToJsonString());
     File.WriteAllText(Path.Combine(home, "files.json"), new JsonObject { ["Drives"] = new JsonArray(Path.GetPathRoot(Path.GetTempPath())) }.ToJsonString());
+    // sessions: the PC TestClient-Banned and a range nobody's in banned from sharing
+    string sessionsDir = Path.Combine(home, "data", "sessions");
+    Directory.CreateDirectory(sessionsDir);
+    File.WriteAllText(Path.Combine(sessionsDir, "bans.json"), new JsonObject { ["List"] = new JsonArray(
+        new JsonObject { ["Kind"] = "PC", ["Value"] = "TestClient-Banned", ["Name"] = "TestClient-Banned", ["At"] = DateTime.UtcNow },
+        new JsonObject { ["Kind"] = "Address", ["Value"] = "10.255.255.0/24", ["Name"] = "10.255.255.0/24", ["At"] = DateTime.UtcNow }) }.ToJsonString());
     Console.WriteLine(made);
     return 0;
 }
@@ -86,6 +95,32 @@ if (args is ["report", var rh, var rp, var rt, var ru, var rpw, var rname, var r
             break;
         }
     rc.Dispose();
+    return 0;
+}
+if (args is ["share", var sh, var sp, var stoken, var su, var spw, var spc, var strack, var stitle])
+{
+    // a session shared from the PC <spc> on the sessions module (a small made-up file), for the server's page
+    var sc = await ServerClient.ConnectAsync(sh, int.Parse(sp), stoken, su, spw, spc, "TestClient", default);
+    var ch = await sc.OpenAsync("sessions", "Analysis");
+    var data = System.Text.Encoding.UTF8.GetBytes("# ForzaWheel session,2\n" + stitle);
+    int n = 0;
+    async Task<JsonObject> Ask(JsonObject q)
+    {
+        q["rid"] = ++n;
+        ch.Post(q);
+        using var t = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (await ch.ReadAsync(t.Token) is { } m) if ((int?)m["rid"] == n) return m;
+        throw new Exception("ended");
+    }
+    var shared = await Ask(new JsonObject
+    {
+        ["op"] = "share", ["size"] = data.Length, ["sha256"] = Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant(),
+        ["meta"] = new JsonObject { ["title"] = stitle, ["description"] = "", ["driver"] = su, ["game"] = "FH5", ["track"] = strack, ["car"] = "Test car",
+            ["class"] = "S1", ["laps"] = 3, ["best"] = 90.5, ["started"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() },
+    });
+    var put = await Ask(new JsonObject { ["op"] = "put", ["id"] = shared["id"]?.ToString(), ["offset"] = 0, ["data"] = Convert.ToBase64String(data), ["eof"] = true });
+    Console.WriteLine($"{put["op"]} {shared["id"]} {put["message"]}");
+    sc.Dispose();
     return 0;
 }
 if (args.Length < 5) { Console.WriteLine("TestClient <host> <port> <token> <user> <password>"); return 2; }
@@ -324,6 +359,119 @@ if (a.Modules.Contains("processes"))
     fleet.Dispose();
     pa.Dispose();
     pb.Dispose();
+}
+
+if (a.Modules.Contains("sessions"))
+{
+    // shared sessions: a share in pieces pushed to both, listed, downloaded the same, edited, refused to someone else and
+    // to a banned PC, deleted; bad pieces refused
+    int rid = 0;
+    var pushes = new List<JsonObject>();
+    async Task<JsonObject> Ask(ServerChannel ch, JsonObject q)
+    {
+        int mine = ++rid;
+        q["rid"] = mine;
+        ch.Post(q);
+        using var t = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        while (await ch.ReadAsync(t.Token) is { } m)
+        {
+            if ((int?)m["rid"] == mine) return m;
+            if (m["rid"] == null) lock (pushes) pushes.Add(m);
+        }
+        throw new Exception("sessions channel ended: " + ch.Ended);
+    }
+    async Task<JsonObject> Push(ServerChannel ch, string op)
+    {
+        using var t = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (await ch.ReadAsync(t.Token) is { } m) if (ServerClient.Str(m, "op") == op && m["rid"] == null) return m;
+        throw new Exception("no " + op);
+    }
+    string Hash(byte[] d) => Convert.ToHexString(SHA256.HashData(d)).ToLowerInvariant();
+    var sa = await a.OpenAsync("sessions", "Analysis");
+    var sb = await b.OpenAsync("sessions", "Analysis");
+    var before = await Ask(sa, new JsonObject { ["op"] = "list" });
+    Check(before["sessions"] is JsonArray, $"sessions: list ({(before["sessions"] as JsonArray)?.Count})");
+    var file = new byte[700_000];
+    new Random(3).NextBytes(file);
+    JsonObject Meta(string title) => new()
+    {
+        ["title"] = title, ["description"] = "line 1\nline 2", ["driver"] = "Tester", ["game"] = "FH5", ["track"] = "Goliath", ["car"] = "Test car",
+        ["class"] = "S1", ["laps"] = 3, ["best"] = 92.345, ["started"] = 1763000000000, ["video"] = null, ["videoAt"] = null, ["newField"] = "kept",
+        ["user"] = "spoofed", ["mine"] = true,
+    };
+    var share = await Ask(sa, new JsonObject { ["op"] = "share", ["meta"] = Meta("Test share"), ["size"] = file.Length, ["sha256"] = Hash(file) });
+    string sid = ServerClient.Str(share, "id");
+    Check(sid.Length == 16, "sessions: share gives an id " + sid + " " + share["message"]);
+    var p1 = await Ask(sa, new JsonObject { ["op"] = "put", ["id"] = sid, ["offset"] = 0, ["data"] = Convert.ToBase64String(file, 0, 512 * 1024), ["eof"] = false });
+    Check((long?)p1["received"] == 512 * 1024, "sessions: the first piece received");
+    var listed = await Ask(sa, new JsonObject { ["op"] = "list" });
+    Check((listed["sessions"] as JsonArray)!.OfType<JsonObject>().All(x => ServerClient.Str(x, "id") != sid), "sessions: not listed until it's complete");
+    var p2 = await Ask(sa, new JsonObject { ["op"] = "put", ["id"] = sid, ["offset"] = 512 * 1024, ["data"] = Convert.ToBase64String(file, 512 * 1024, file.Length - 512 * 1024), ["eof"] = true });
+    Check((long?)p2["received"] == file.Length, "sessions: the last piece completes it");
+    var addedB = await Push(sb, "added");
+    var sm = addedB["session"] as JsonObject;
+    Check(ServerClient.Str(sm!, "id") == sid && (bool?)sm!["mine"] == true && ServerClient.Str(sm, "user") == a.User && ServerClient.Str(sm, "client") == "TestClient-A"
+        && (long?)sm["size"] == file.Length && (long?)sm["shared"] > 0 && ServerClient.Str(sm, "newField") == "kept" && sm["address"] == null,
+        "sessions: added pushed to the other client: the server's fields set, unknown ones kept, where it came from not sent");
+
+    var got = new MemoryStream();
+    long off = 0;
+    int pieces = 0;
+    while (pieces < 5)
+    {
+        var r = await Ask(sb, new JsonObject { ["op"] = "get", ["id"] = sid, ["offset"] = off, ["length"] = 5 << 20 });
+        var piece = Convert.FromBase64String(ServerClient.Str(r, "data"));
+        got.Write(piece);
+        off += piece.Length;
+        pieces++;
+        if (pieces == 1) Check(piece.Length == 1 << 20 || piece.Length == file.Length, $"sessions: get capped at 1 MB ({piece.Length})");
+        if ((bool?)r["eof"] == true) break;
+    }
+    Check(got.ToArray().SequenceEqual(file), $"sessions: downloaded the same bytes ({pieces} piece)");
+
+    var edited = await Ask(sa, new JsonObject { ["op"] = "edit", ["id"] = sid, ["title"] = "Edited", ["description"] = "new", ["video"] = "https://youtu.be/abc", ["videoAt"] = 12.5 });
+    var changedB = await Push(sb, "changed");
+    Check(ServerClient.Str((edited["session"] as JsonObject)!, "title") == "Edited" && ServerClient.Str((changedB["session"] as JsonObject)!, "video") == "https://youtu.be/abc",
+        "sessions: edit answered and changed pushed");
+    await Ask(sa, new JsonObject { ["op"] = "edit", ["id"] = sid, ["title"] = "Edited", ["description"] = "new", ["video"] = "javascript:alert(1)", ["videoAt"] = null });
+    var bad = await Push(sb, "changed");
+    Check((bad["session"] as JsonObject)!["video"] == null, "sessions: a video that isn't an https link is dropped");
+
+    var other = await ServerClient.ConnectAsync(host, port, token, user + "-basic", password, "TestClient-Other", "TestClient", default);
+    var so = await other.OpenAsync("sessions", "Analysis");
+    var theirs = (await Ask(so, new JsonObject { ["op"] = "list" }))["sessions"] as JsonArray;
+    Check(theirs!.OfType<JsonObject>().Any(x => ServerClient.Str(x, "id") == sid && (bool?)x["mine"] == false), "sessions: another user sees it, not theirs");
+    var refuse = await Ask(so, new JsonObject { ["op"] = "delete", ["id"] = sid });
+    Check(ServerClient.Str(refuse, "op") == "error", "sessions: another (basic) user can't delete it: " + refuse["message"]);
+    var refuseEdit = await Ask(so, new JsonObject { ["op"] = "edit", ["id"] = sid, ["title"] = "Mine now" });
+    Check(ServerClient.Str(refuseEdit, "op") == "error", "sessions: nor edit it");
+    other.Dispose();
+
+    var big = await Ask(sa, new JsonObject { ["op"] = "share", ["meta"] = Meta("Big"), ["size"] = 201L << 20, ["sha256"] = Hash(file) });
+    Check(ServerClient.Str(big, "op") == "error", "sessions: over 200 MB refused: " + big["message"]);
+    var s2 = ServerClient.Str(await Ask(sa, new JsonObject { ["op"] = "share", ["meta"] = Meta("Gap"), ["size"] = 10, ["sha256"] = Hash(new byte[10]) }), "id");
+    var gap = await Ask(sa, new JsonObject { ["op"] = "put", ["id"] = s2, ["offset"] = 5, ["data"] = Convert.ToBase64String(new byte[5]), ["eof"] = true });
+    Check(ServerClient.Str(gap, "op") == "error", "sessions: a piece at the wrong offset refused: " + gap["message"]);
+    var s3 = ServerClient.Str(await Ask(sa, new JsonObject { ["op"] = "share", ["meta"] = Meta("Hash"), ["size"] = 10, ["sha256"] = Hash(new byte[10]) }), "id");
+    var wrong = await Ask(sa, new JsonObject { ["op"] = "put", ["id"] = s3, ["offset"] = 0, ["data"] = Convert.ToBase64String(new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 }), ["eof"] = true });
+    Check(ServerClient.Str(wrong, "op") == "error", "sessions: a checksum that doesn't match refused: " + wrong["message"]);
+    var unknown = await Ask(sa, new JsonObject { ["op"] = "frobnicate" });
+    Check(ServerClient.Str(unknown, "message").Contains("update it"), "sessions: an unknown op: " + unknown["message"]);
+
+    var banned = await ServerClient.ConnectAsync(host, port, token, user, password, "TestClient-Banned", "TestClient", default);
+    var sx = await banned.OpenAsync("sessions", "Analysis");
+    var no = await Ask(sx, new JsonObject { ["op"] = "share", ["meta"] = Meta("Banned"), ["size"] = 10, ["sha256"] = Hash(new byte[10]) });
+    Check(ServerClient.Str(no, "op") == "error", "sessions: a banned PC can't share: " + no["message"]);
+    Check((await Ask(sx, new JsonObject { ["op"] = "list" }))["sessions"] is JsonArray, "sessions: but can still list");
+    banned.Dispose();
+
+    var del = await Ask(sa, new JsonObject { ["op"] = "delete", ["id"] = sid });
+    var removedB = await Push(sb, "removed");
+    Check(ServerClient.Str(del, "op") == "delete" && ServerClient.Str(removedB, "id") == sid, "sessions: delete answered and removed pushed");
+    var gone = await Ask(sb, new JsonObject { ["op"] = "get", ["id"] = sid, ["offset"] = 0, ["length"] = 100 });
+    Check(ServerClient.Str(gone, "op") == "error", "sessions: a deleted one can't be downloaded: " + gone["message"]);
+    sa.Dispose();
+    sb.Dispose();
 }
 
 a.Dispose();

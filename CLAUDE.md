@@ -37,6 +37,13 @@ Analyzer's master database (DA 4.1.0), and say what the client needs changed. Re
 `DaisysServer.sln`, PROTOCOL §6, README (feature, tab, data folder, layout), `src/Directory.Build.props` (0.1.2),
 TestClient (`processes:` checks, `report`). Told the user the client needs nothing.
 
+**Asked (2026-11-13):** the `sessions` module from DA 4.17.0's brief (in REQUESTS.md; Share Session), with an admin tool
+to find sessions, remove them one at a time or in bulk, and ban a cheater's IP, PC, account or token; the port to open;
+publish the next minor. Released as 0.2.0 (2026-11-13); notes in `src/Modules/Sessions/CLAUDE.md`. Changed:
+`src/Modules/Sessions/` (new), `IModuleChannel` (`Address`, `TokenId`, `TokenName`) and `Session.cs`, PROTOCOL §7,
+README, version 0.2.0, TestClient (`sessions:` checks, `share`, `setup` adds `<user>-basic` and bans). Told the user:
+port 38900 (TCP, router only: the installer's firewall rule covers the program), DA needs nothing.
+
 **Done (both released 2026-10-30, `rosscarlson/DaisysServer`, public; the releases are the updater's source):**
 - 0.1.0: this whole repo (layout in the README). Downloads: `DaisysServer-Android-Brief.md` (the connection and
   Notepad; updated for DA 3.26.5: no PC hosts).

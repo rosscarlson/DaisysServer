@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The sessions module: Daisy's App's Share Session, racing sessions shared with every user (not sealed). -->
+</Project>

@@ -257,7 +257,8 @@ public sealed class Session
             Error(m, module == null ? $"{server.Settings.Name} doesn't have the {id} module." : $"The {module.Name} module is switched off on {server.Settings.Name}.");
             return;
         }
-        var c = new ModuleChannel(this, ch, module.Id, user, Client, Clean(Str(m, "from"), 40));
+        var c = new ModuleChannel(this, ch, module.Id, user, Client, Clean(Str(m, "from"), 40),
+            server.Tokens.All().FirstOrDefault(t => t.Id == TokenId)?.Name ?? "");
         channels[ch] = c;
         Reply(m, new JsonObject { ["op"] = "opened", ["ch"] = ch });
         server.RaiseChanged();
@@ -276,7 +277,7 @@ public sealed class Session
         });
     }
 
-    private sealed class ModuleChannel(Session session, int id, string module, ServerUser user, string client, string from) : IModuleChannel
+    private sealed class ModuleChannel(Session session, int id, string module, ServerUser user, string client, string from, string tokenName) : IModuleChannel
     {
         private readonly Channel<JsonObject> inbox = Channel.CreateUnbounded<JsonObject>(new UnboundedChannelOptions { SingleReader = true });
 
@@ -284,6 +285,9 @@ public sealed class Session
         public ServerUser User => user;
         public string Client => client;
         public string From => from;
+        public string Address => session.Address;
+        public string TokenId => session.TokenId;
+        public string TokenName => tokenName;
 
         public void Post(JsonNode message) => session.Post(new JsonObject { ["ch"] = id, ["msg"] = message });
 
