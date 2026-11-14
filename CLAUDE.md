@@ -34,11 +34,17 @@ Module notes are in each module's own CLAUDE.md (`src/Modules/Notepad/CLAUDE.md`
   version, TestClient (`sessions:` checks, `share`; `setup` also makes `<user>-basic` and two bans). Told the user:
   port **38900** TCP (forward it on the router; the installer's firewall rule is for the program, any port); DA needs
   nothing.
-- 2026-11-14: **Users** gets Edit (user name, display name, email), profile fields from one list
-  (`UserStore.Fields`: a new field is a line there; the page, `users.json`'s `Profile` and the ops follow it), icon-only
-  buttons with tooltips (Users page only; `Ui.Button` with empty text), new op `useredit` and `profile`/`fields` on
-  `users`/`useradd` (PROTOCOL §3), the title "Daisy's Server v0.2.1". Released as **0.2.1**. TestClient: 8 `users:` checks.
-  Told the user how sign-in is secured (below) and that profile fields aren't sealed.
+- 2026-11-14: **0.2.1** (released): users' display name and email, fields from one list (`UserStore.Fields`: a new
+  field is one line; the page, `users.json`'s `Profile` and the ops follow it), op `useredit`, icon-only buttons on
+  Users (`Ui.Button` with empty text), the version in the title. Asked how sign-in is secured: answered from below.
+- 2026-11-14, later: one form on Users for Add and Edit (Edit fills it as "Edit <name>"; Update, or Confirm? when a
+  new password's typed; Add gray until something's changed, to make a new user from one; ✕ stops editing), the
+  password twice on one line, and **tokens merged into Users**. Released as **0.2.2**. Changed: `UsersPage.cs` (rewritten: form, each user's tokens hidden
+  with Copy/Revoke, New token, "Tokens for anyone" to tie old ones), `TokensPage.cs` (deleted; tab gone),
+  `TokenStore.cs` (`UserId`, `UserOf`, `Assign`, `RevokeFor`), `UserStore.cs` (`Deleted` event, `ToString`),
+  `ServerHost.cs` (delete revokes their tokens), `Session.cs` (login refuses another user's token; `useradd` answers
+  with `token`; op `usertoken`), `StatusPage.cs` step 2, `MainWindow.cs`, README, PROTOCOL §2/§3, the version,
+  TestClient (5 more `users:` checks).
 - DA's side lives in DA (`src/DaisysApp.Core/Server/`, details in DA's `src/Modules/Tools/CLAUDE.md`). There, DA's
   `*-GAMER11.*`/`*-PLEX*` files are OneDrive conflict copies and other sessions' work is left alone: commit only
   your own files. DA's local clone may be behind GitHub (other PCs release): `git fetch`/`git show origin/main:…`.
@@ -47,6 +53,11 @@ Module notes are in each module's own CLAUDE.md (`src/Modules/Notepad/CLAUDE.md`
 - **Connecting:** token `dsk1_` + 6-byte id + 32-byte secret; ECDH P-256 + HKDF salted with the secret (forward
   secrecy, mutual proof). **Signing in:** PBKDF2 makes the sign-in proof and a key wrapping a random data key (the
   end-to-end key); the server keeps a verifier. An admin reset deletes the user's data; users change their own and keep it.
+  A wrong sign-in costs 1 s, with no lockout (offered one). Advised: one token per device/person, strong passwords.
+- **Tokens belong to users** (0.2.2): only their user signs in with one; tokens made before (`UserId` "") work
+  for anyone until tied, so no one's locked out by the update. Adding a user (page or `useradd`) makes and copies
+  theirs; a user may have several (devices). Revoke and Delete drop connections.
+- **Profile fields** (display name, email) aren't sealed: they're for the admin to know who's who. Email is checked.
 - **Notepad:** OT on the clients; the server orders sealed changes and keeps snapshots. DA's KnownHost is
   `host:port user`.
 - **Files, Processes, Sessions aren't sealed** (the server's files; shared databases): encrypted on the wire only.
@@ -55,18 +66,22 @@ Module notes are in each module's own CLAUDE.md (`src/Modules/Notepad/CLAUDE.md`
   block the module entirely.
 
 **Where it stands:**
-- TestClient's 73 checks (Files 16, Processes 13, Sessions 20, Users 8) pass (0.2.1 Debug; 0.2.0 published too). The Users page's edit panel checked on screen; saving from it wasn't clicked (the op is TestClient's). Pages
-  checked on screen: Files' card, Processes' tab, Sessions' tab (via UI Automation, `%TEMP%\dsedit\shot.ps1`:
-  search, Ban PC, Remove, Unban).
+- TestClient's 78 checks (Files 16, Processes 13, Sessions 20, Users 13) pass on 0.2.2's Debug build. Checked on
+  screen via UI Automation (`%TEMP%\dsedit\shot.ps1`, `users.ps1 -Invoke … -Field … -Value …`, `tie.ps1`): Files'
+  card, Processes' tab, Sessions' tab (search, Ban PC, Remove, Unban); Users: Edit fills the form, Add gray until a
+  change, Update, tying an old token (it moves under the user, the card hides).
 - DA through a test server: 3.26.5 Notepad (two copies, live, reconnect), 4.1.0 Processes (`%TEMP%\dsedit\make_devp.ps1
   -Name … -Token … -Port 38991 -User … -Password …`, Support only). `%TEMP%\DaisysDev` is the DA session's: leave it.
 - **Not tested:** DA 4.17.0 with Sessions (the brief's steps 1–6); several rows picked at once on the Sessions tab;
   Ban user/address/token and ban by hand; Processes' Export…/Import… and daily fleet broadcast; the installer
-  (install, firewall, upgrade, uninstall) and self-update; Users/Tokens/Settings by hand; the internet; admin ops
-  from a client.
+  (install, firewall, upgrade, uninstall) and self-update; on the Users page: Add, New token, Copy (they'd overwrite
+  the user's clipboard), a new password through Update, Revoke; Settings by hand; the internet. DA doesn't use
+  `useredit`, `usertoken` or the profile yet.
 
 **Next (waiting on the user):**
-- They update to 0.2.0, forward 38900, and try Share Session from DA 4.17.0 (two PCs or users).
+- They update to 0.2.2, then tie their existing tokens to users under Users → Tokens for anyone.
+- They update, forward 38900, and try Share Session from DA 4.17.0 (two PCs or users).
+- Offered: a sign-in lockout. Later (theirs): sealing the server's stored data.
 - The Android session builds from the two briefs (connection and Notepad, then Files).
 - Offered: removing DA's unused `RemoteChannels` (Core and the AI module).
 

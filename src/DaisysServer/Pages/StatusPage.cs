@@ -102,7 +102,7 @@ internal sealed class StatusPage : UserControl
             steps.Children.Add(row);
         }
         Step(1, "Add a user for each person (admin for yourself). Each user's data is theirs alone, sealed with their password.", users, "users", "Users");
-        Step(2, "Make a token and paste it into each client (Daisy's App: Settings → Tools → Notepad → Daisy's Server) with this server's address and port.", tokens, "tokens", "Tokens");
+        Step(2, "Paste each user's token (made with them; Copy on Users) into their client (Daisy's App: Settings → Tools → Notepad → Daisy's Server) with this server's address and port.", tokens, "users", "Users");
         Step(3, $"Let clients reach port {server.Settings.Port}: the installer opened Windows Firewall for it; from the internet, forward it on your router.", false, "settings", "Settings");
 
         table.Children.Clear();

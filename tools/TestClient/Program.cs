@@ -221,6 +221,25 @@ catch (ServerException ex) { Check(true, "a wrong current password can't change 
     try { await basic.AskAsync(new JsonObject { ["op"] = "useredit", ["id"] = uid, ["profile"] = new JsonObject { ["displayName"] = "x" } }); Check(false, "users: a basic user can't useredit"); }
     catch (ServerException ex) { Check(true, "users: a basic user can't useredit: " + ex.Message); }
     basic.Dispose();
+
+    // tokens belong to users (0.2.2): useradd makes one, only they sign in with it, and it goes with them
+    string extra = "tok" + Guid.NewGuid().ToString("N")[..6];
+    var made = await a.AskAsync(new JsonObject { ["op"] = "useradd", ["name"] = extra, ["password"] = password, ["admin"] = false });
+    string theirs = ServerClient.Str(made, "token");
+    Check(theirs.StartsWith("dsk1_"), "users: useradd answers with their token");
+    var own = await ServerClient.ConnectAsync(host, port, theirs, extra, password, "TestClient-Own", "TestClient", default);
+    Check(own.User == extra, "users: they sign in with it");
+    own.Dispose();
+    try { (await ServerClient.ConnectAsync(host, port, theirs, user, password, "TestClient-NotOwn", "TestClient", default)).Dispose(); Check(false, "users: another user can't sign in with their token"); }
+    catch (ServerException ex) { Check(true, "users: another user can't sign in with their token: " + ex.Message); }
+    string extraId = ServerClient.Str((await a.AskAsync(new JsonObject { ["op"] = "users" }))["users"]!.AsArray().OfType<JsonObject>().First(x => ServerClient.Str(x, "name") == extra), "id");
+    string second = ServerClient.Str(await a.AskAsync(new JsonObject { ["op"] = "usertoken", ["id"] = extraId }), "token");
+    var own2 = await ServerClient.ConnectAsync(host, port, second, extra, password, "TestClient-Own2", "TestClient", default);
+    Check(second.StartsWith("dsk1_") && second != theirs, "users: usertoken makes them another, and it works");
+    own2.Dispose();
+    await a.AskAsync(new JsonObject { ["op"] = "userdelete", ["id"] = extraId });
+    try { (await ServerClient.ConnectAsync(host, port, second, extra, password, "TestClient-Gone", "TestClient", default)).Dispose(); Check(false, "users: a deleted user's tokens are revoked"); }
+    catch (Exception ex) { Check(true, "users: a deleted user's tokens are revoked: " + ex.Message); }
 }
 
 if (a.Modules.Contains("files"))

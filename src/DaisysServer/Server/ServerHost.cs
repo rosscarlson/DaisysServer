@@ -49,6 +49,7 @@ public sealed class ServerHost : IDisposable
             try { Directory.Delete(Path.Combine(JsonFile.DataFolder, "users", u.Id), true); } catch (DirectoryNotFoundException) { }
             catch (Exception ex) { ModuleLog.Server.Warn($"{u.Name}'s data couldn't all be deleted", ex); }
         };
+        Users.Deleted += u => Tokens.RevokeFor(u.Id);
         Users.Changed += RaiseChanged;
     }
 

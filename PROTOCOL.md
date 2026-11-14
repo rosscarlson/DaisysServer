@@ -72,6 +72,8 @@ Users are made on the server, by its window or by an admin client. A user's pass
    - `wrap` = HMAC-SHA256(key = `master`, message = ASCII `"DaisysServer wrap"`).
 3. `{"op": "login", "user", "auth": <base64>}` → `{"op": "login", "user", "admin": bool, "vault": <sealed> | null}`.
    - A wrong name or password gets `{"op": "error", "message": "Wrong user name or password."}` after a second's pause.
+   - Since 0.2.2 each token is for one user: anyone else signing in with it gets an `error` ("This token is for
+     another user"). Tokens made before are for any user until they're tied to one on the server.
    - After 5 wrong tries, the connection is closed.
    - The server keeps only SHA-256(its salt ‖ `auth`), never `auth` itself.
 4. `vault` is the user's **data key**: 32 random bytes, sealed with `wrap` (see *Sealing* below).
@@ -101,9 +103,10 @@ Every question can carry a `"rid"` (a number). Its answer, or its `error`, carri
 | `{"op": "close", "ch"}` | Ends a channel. Not answered. |
 | `{"op": "password", …}` | See above. |
 | **Admins only:** `{"op": "users"}` | `{"op": "users", "users": [{id, name, admin, created, lastSignIn, profile}], "fields": [{key, label, max}]}`. Since 0.2.1, `fields` lists the profile fields (now `displayName` and `email`; more may come, so show what's listed), and each user's `profile` has a string for each (empty when unset). |
-| `{"op": "useradd", "name", "password", "admin", "profile"}` | `{"op": "useradd"}`. The password goes over the encrypted connection, and the server makes the verifier from it. `profile` (since 0.2.1, optional): `{key: value}` for the fields. |
+| `{"op": "useradd", "name", "password", "admin", "profile"}` | `{"op": "useradd", "token"}`. The password goes over the encrypted connection, and the server makes the verifier from it. `profile` (since 0.2.1, optional): `{key: value}` for the fields. `token` (since 0.2.2): theirs, made with them, to give them. |
+| `{"op": "usertoken", "id"}` (since 0.2.2) | `{"op": "usertoken", "token"}`: another token for that user (a second device, or to replace one; revoking is on the server). |
 | `{"op": "useredit", "id", "name", "profile"}` (since 0.2.1) | `{"op": "useredit"}`, or an `error` (a name taken, a bad email). `name` (optional) renames them: their password and data stay. `profile` sets the fields given (an empty string clears one); keys the server doesn't know are ignored. |
-| `{"op": "userdelete", "id"}`, `{"op": "useradmin", "id", "admin"}`, `{"op": "userpassword", "id", "password"}` | Their op echoed back, or an `error`. `userpassword` deletes the user's data (see above). |
+| `{"op": "userdelete", "id"}`, `{"op": "useradmin", "id", "admin"}`, `{"op": "userpassword", "id", "password"}` | Their op echoed back, or an `error`. `userpassword` deletes the user's data (see above). `userdelete` revokes their tokens (since 0.2.2). |
 
 The server can send these at any time:
 

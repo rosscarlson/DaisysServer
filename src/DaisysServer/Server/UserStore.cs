@@ -32,6 +32,8 @@ public sealed class UserStore
         public string Get(string key) => Profile.TryGetValue(key, out var v) ? v : "";
         public string DisplayName => Get("displayName") is { Length: > 0 } d ? d : Name;
         public ServerUser ToServerUser() => new(Id, Name, Admin);
+        public override string ToString() => Name;
+
         public User Copy()
         {
             var c = (User)MemberwiseClone();
@@ -63,6 +65,8 @@ public sealed class UserStore
     public event Action? Changed;
     /// <summary>A user deleted, or their password reset by an admin (their data goes).</summary>
     public event Action<ServerUser>? Removed;
+    /// <summary>A user deleted (after <see cref="Removed"/>): their tokens go.</summary>
+    public event Action<ServerUser>? Deleted;
 
     public UserStore(byte[] secret)
     {
@@ -150,6 +154,7 @@ public sealed class UserStore
         }
         ModuleLog.Server.Info($"User {u.Name} deleted");
         Removed?.Invoke(u.ToServerUser());
+        Deleted?.Invoke(u.ToServerUser());
         Changed?.Invoke();
         return null;
     }

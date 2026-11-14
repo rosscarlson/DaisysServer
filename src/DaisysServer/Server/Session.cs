@@ -186,6 +186,14 @@ public sealed class Session
             case "login":
                 {
                     var u = server.Users.SignIn(Str(m, "user"), Str(m, "auth"));
+                    // a token for one user signs in only them
+                    if (u != null && server.Tokens.UserOf(TokenId) is { Length: > 0 } owner && owner != u.Id)
+                    {
+                        Log.Warn($"{Client} ({Address}): {u.Name} tried to sign in with another user's token ({TokenId})");
+                        Error(m, "This token is for another user: ask for your own.");
+                        if (++failures >= 5) Close("Too many tries.");
+                        return;
+                    }
                     if (u == null)
                     {
                         Log.Warn($"{Client} ({Address}): wrong user name or password for \"{Clean(Str(m, "user"), 40)}\"");
@@ -242,7 +250,16 @@ public sealed class Session
                 foreach (var f in UserStore.Fields) fields.Add(new JsonObject { ["key"] = f.Key, ["label"] = f.Label, ["max"] = f.Max });
                 Reply(m, new JsonObject { ["op"] = "users", ["users"] = list, ["fields"] = fields });
                 return;
-            case "useradd": problem = server.Users.Add(Str(m, "name"), Str(m, "password"), (bool?)m["admin"] == true, Profile(m)); break;
+            case "useradd":
+                if (server.Users.Add(Str(m, "name"), Str(m, "password"), (bool?)m["admin"] == true, Profile(m)) is { } notAdded) { Error(m, notAdded); return; }
+                // their token, made with them (since 0.2.2)
+                var added = server.Users.All().First(x => x.Name.Equals(Str(m, "name").Trim(), StringComparison.OrdinalIgnoreCase));
+                Reply(m, new JsonObject { ["op"] = op, ["token"] = server.Tokens.Create(added.Name, added.Id) });
+                return;
+            case "usertoken":
+                if (server.Users.All().FirstOrDefault(x => x.Id == Str(m, "id")) is not { } holder) { Error(m, "No such user."); return; }
+                Reply(m, new JsonObject { ["op"] = op, ["token"] = server.Tokens.Create(holder.Name, holder.Id) });
+                return;
             case "useredit": problem = server.Users.Edit(Str(m, "id"), m["name"] is JsonValue ? Str(m, "name") : null, Profile(m) ?? new()); break;
             case "userdelete": problem = Str(m, "id") == user.Id ? "You can't delete yourself." : server.Users.Delete(Str(m, "id")); break;
             case "useradmin": problem = server.Users.SetAdmin(Str(m, "id"), (bool?)m["admin"] == true); break;
