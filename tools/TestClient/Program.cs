@@ -237,6 +237,17 @@ catch (ServerException ex) { Check(true, "a wrong current password can't change 
     var own2 = await ServerClient.ConnectAsync(host, port, second, extra, password, "TestClient-Own2", "TestClient", default);
     Check(second.StartsWith("dsk1_") && second != theirs, "users: usertoken makes them another, and it works");
     own2.Dispose();
+
+    // groups (0.2.3): a new user is in User; Admin among them makes them an admin
+    JsonObject Extra(JsonObject list) => list["users"]!.AsArray().OfType<JsonObject>().First(x => ServerClient.Str(x, "id") == extraId);
+    List<string> GroupsOf(JsonObject u) => u["groups"]!.AsArray().Select(g => (string)g!).ToList();
+    var withGroups = await a.AskAsync(new JsonObject { ["op"] = "users" });
+    var allGroups = withGroups["groups"]!.AsArray().Select(g => (string)g!).ToList();
+    Check(allGroups.Contains("Admin") && allGroups.Contains("User") && GroupsOf(Extra(withGroups)).SequenceEqual(["User"]),
+        "users: the groups (" + string.Join(", ", allGroups) + "), a new user in User");
+    await a.AskAsync(new JsonObject { ["op"] = "useredit", ["id"] = extraId, ["groups"] = new JsonArray("Admin", "SE-Analysis", "Nosuch") });
+    var regrouped = Extra(await a.AskAsync(new JsonObject { ["op"] = "users" }));
+    Check(GroupsOf(regrouped).SequenceEqual(["Admin", "SE-Analysis"]) && (bool?)regrouped["admin"] == true, "users: useredit sets the groups (unknown ignored), Admin makes an admin");
     await a.AskAsync(new JsonObject { ["op"] = "userdelete", ["id"] = extraId });
     try { (await ServerClient.ConnectAsync(host, port, second, extra, password, "TestClient-Gone", "TestClient", default)).Dispose(); Check(false, "users: a deleted user's tokens are revoked"); }
     catch (Exception ex) { Check(true, "users: a deleted user's tokens are revoked: " + ex.Message); }

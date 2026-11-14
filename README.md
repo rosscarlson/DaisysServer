@@ -1,6 +1,6 @@
 # Daisy's Server
 
-**Version 0.2.2**
+**Version 0.2.3**
 
 A central server for Daisy's App's clients: Daisy's App on your PCs, Daisy's App Mobile, and whatever comes next. Their
 modules keep data on it and talk to each other through it, live, over the internet as well as at home.
@@ -11,7 +11,7 @@ modules keep data on it and talk to each other through it, live, over the intern
   connection is encrypted with fresh keys each time, only someone with the token can make them, and only that user
   can sign in with it. Each **user's** data is sealed on their own
   clients with a key from their password, so the server keeps it but can't read it.
-- **Users**: basic and admin. Each user's data is theirs alone, so one person's notes are never another's.
+- **Users**: in groups (Admin, User, SE-Analysis; Admin manages users). Each user's data is theirs alone, so one person's notes are never another's.
 - **Modular**, like Daisy's App. Each feature is a module (`modules\<Name>\`) that the server hands its clients'
   calls to. A client says which of the server's modules it wants, and from which of its own. Either side can switch a
   module off.
@@ -39,15 +39,14 @@ SmartScreen may warn you: choose **More info → Run anyway**. Everything it nee
 
 ## Setting it up
 
-1. **Users**: add one for each person. Make yourself an admin. A user's password makes the key their data is sealed
+1. **Users**: add one for each person. Put yourself in **Admin**. A user's password makes the key their data is sealed
    with, and each user can change it from a client (Daisy's App: Settings → General → Daisy's Server → Change
    password).
    - Setting a new password here, on the server, **deletes that user's data**, since it can't be opened without the
      old one.
 2. **Tokens**: each user's token is made with them and copied: send it to them. Only they can sign in with it.
-   **Copy** under their name copies it again, **Revoke** shuts it out and drops its connections, and **New token**
-   makes another (for a second device, or to replace one). Tokens made before 0.2.2 are for any user: tie each to
-   its user under **Tokens for anyone**.
+   Editing them, the **Token** row copies it again or **replaces** it (the old one stops working and its connections
+   drop). Tokens made before 0.2.2 are for any user: tie each to its user under **Tokens for anyone**.
 3. **Reaching it**:
    - At home: clients use this PC's address (shown on **Status**) and the port (38900 unless you change it in
      **Settings**).
@@ -64,7 +63,7 @@ SmartScreen may warn you: choose **More info → Run anyway**. Everything it nee
 | Tab | |
 |---|---|
 | **Status** | Listening or not (**Start** / **Stop**), the addresses clients use, the steps to get going while there are no users or tokens yet, and who's connected: client, user, address, app, the modules it's using, and since when. |
-| **Users** | One form: **Add a user** (user name, the password twice, display name, email, admin; their token is made and copied). A user's **Edit** fills it in as **Edit &lt;name&gt;**: **Update** saves it (renaming keeps their password and data, but their clients must sign in with the new name; a password typed there is a new one, which deletes their data, so Update then asks **Confirm?**), **Add** (gray until something's changed) makes a new user from it, and **✕** stops editing. Each user, as icons (point at one for what it does): **Edit**, **New token** (copied), **Delete** (a two-click **Confirm?**; their tokens go too), and under them their tokens (hidden): **Copy** and **Revoke** (**Confirm?**). **Tokens for anyone** (made before 0.2.2, only while there are some): tie each to a user, **Copy**, **Revoke**. The display name and email are kept on the server as written: they're how you know who's who, not sealed data. |
+| **Users** | One form: **Add a user** (user name, the password twice, display name, email, **Groups**: a dropdown of checkboxes, a new user in User; their token is made and copied). A user's **Edit** fills it in as **Edit &lt;name&gt;**: **Update** saves it (renaming keeps their password and data, but their clients must sign in with the new name; a password typed there is a new one, which deletes their data, so Update then asks **Confirm?**), **Add** (gray until something's changed) makes a new user from it, and **✕** stops editing. Editing, the **Token** row shows their token hidden, with **Copy** and **Replace** (**Confirm?**; copied, the old one stops working), or **New token** if they've none. Each user (with their groups), as icons (point at one for what it does): **Edit** and **Delete** (a two-click **Confirm?**; their tokens go too). **Tokens for anyone** (made before 0.2.2, only while there are some): tie each to a user, **Copy**, **Revoke**. The display name and email are kept on the server as written: they're how you know who's who, not sealed data. |
 | *a tab per module* | **Notepad**: each user's notes as kept (how many, their size, the changes since the last snapshot, when last changed) and the clients they're joined from. What the notes say isn't shown, because the server can't read it. **Processes**: the database's version, **Export…** and **Import…** (Daisy's App's export file; an import goes to every PC), the PCs (behind or up to date), and every program, with a search. **Sessions**: every session shared (when, title, driver, game, track, car, class, laps, best, user, PC, address, token, size, video) with their count and total size, a **Search** that looks for each word anywhere in a row, and, for the sessions picked (Ctrl+click or Shift+click for many): **Remove**, **Ban user**, **Ban PC**, **Ban address**, **Ban token** (each **Confirm?**; a ban removes every session it matches). Under it, **Banned from sharing**: each ban with **Unban**, and a box to ban a user, PC or address (or a range, like `203.0.113.0/24`) by hand. Someone banned can still browse and download. (**Files** has no tab: its settings are in Settings, and the **Log** shows each file opened.) |
 | **Log** | The server's and its modules' log, live. **Open folder** opens the files. |
 | **Settings** | **Server**: the name clients see, the port, and listening at start. **Startup and tray**: start with Windows (in the tray), and keep running in the tray when the window closes. **Updates**: the version, check when it starts, **Check for updates**, and **Release notes**. **Modules**: each one on or off, from the next start (**Restart now**). **Shared drives (Files)**: a box for each drive (with its free space), ticked to share it, and **Basic users too**. **Folders**: the folders below. |
@@ -113,7 +112,7 @@ src/
   DaisysServer.Core/        what the server and modules share:
     Protocol/               the wire (Wire.cs: token, handshake, frames, Vault) and the client (ServerClient.cs);
                             the same two files are in Daisy's App's src/DaisysApp.Core/Server/
-    Modules/                IServerModule + [ServerModule], IModuleChannel, IModuleHost, ModuleLog, JsonFile, Ui
+    Modules/                IServerModule + [ServerModule], IModuleChannel, IModuleHost, ModuleLog, JsonFile, Ui, MultiPick
   DaisysServer/             the server: App (single instance, tray, startup), MainWindow (tabs, bar, updates),
                             Server/ (ServerHost: listener and modules; Session: one connection; UserStore, TokenStore,
                             ModuleCatalog, ServerSettings), Pages/ (Status, Users (and tokens), Log, Settings),

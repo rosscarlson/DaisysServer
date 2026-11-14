@@ -28,6 +28,8 @@ public sealed class UserStore
         public DateTime? LastSignIn { get; set; }
         /// <summary>The profile: a value for each of <see cref="Fields"/>' keys (missing ones are empty).</summary>
         public Dictionary<string, string> Profile { get; set; } = new();
+        /// <summary>Their groups, from <see cref="Groups"/> (Admin among them when <see cref="Admin"/>).</summary>
+        public List<string> Groups { get; set; } = new();
 
         public string Get(string key) => Profile.TryGetValue(key, out var v) ? v : "";
         public string DisplayName => Get("displayName") is { Length: > 0 } d ? d : Name;
@@ -38,6 +40,7 @@ public sealed class UserStore
         {
             var c = (User)MemberwiseClone();
             c.Profile = new Dictionary<string, string>(Profile);
+            c.Groups = new List<string>(Groups);
             return c;
         }
     }
@@ -53,6 +56,11 @@ public sealed class UserStore
         new("displayName", "Display name", "What others see; the user name if empty", 60),
         new("email", "Email", "To reach them", 254, v => System.Net.Mail.MailAddress.TryCreate(v, out var a) && a.Address == v ? null : "That isn't an email address."),
     ];
+
+    /// <summary>The groups a user can be in, in the order they're shown. "Admin" is <see cref="User.Admin"/>; a new
+    /// user is in "User".</summary>
+    public static readonly IReadOnlyList<string> Groups = ["Admin", "User", "SE-Analysis"];
+    public const string AdminGroup = "Admin", UserGroup = "User";
 
     private sealed class FileShape { public List<User> Users { get; set; } = new(); }
 
@@ -72,6 +80,15 @@ public sealed class UserStore
     {
         this.secret = secret;
         users = JsonFile.Load<FileShape>(FilePath).Users;
+        // users from before 0.2.3 had no groups
+        foreach (var u in users.Where(u => u.Groups.Count == 0)) u.Groups = Sorted(u.Admin ? new[] { AdminGroup, UserGroup } : new[] { UserGroup });
+    }
+
+    /// <summary>The known groups among these, in <see cref="Groups"/>' order.</summary>
+    private static List<string> Sorted(IEnumerable<string> groups)
+    {
+        var set = groups.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return Groups.Where(set.Contains).ToList();
     }
 
     public List<User> All() { lock (gate) return users.Select(u => u.Copy()).ToList(); }
@@ -92,12 +109,15 @@ public sealed class UserStore
     }
 
     /// <summary>Adds a user (the password made into the verifier here, then forgotten). Returns a problem, or null.</summary>
-    public string? Add(string name, string password, bool admin, IReadOnlyDictionary<string, string>? profile = null)
+    public string? Add(string name, string password, bool admin, IReadOnlyDictionary<string, string>? profile = null, IEnumerable<string>? groups = null)
     {
+        // their groups, if given, say whether they're an admin
+        var g = Sorted(groups ?? (admin ? new[] { AdminGroup, UserGroup } : new[] { UserGroup }));
+        admin = g.Contains(AdminGroup);
         if (Problem(name, password) is { } p) return p;
         var (clean, problem) = Clean(profile);
         if (problem != null) return problem;
-        var u = new User { Id = Guid.NewGuid().ToString("N")[..12], Name = name.Trim(), Admin = admin, Created = DateTime.UtcNow };
+        var u = new User { Id = Guid.NewGuid().ToString("N")[..12], Name = name.Trim(), Admin = admin, Groups = g, Created = DateTime.UtcNow };
         Apply(u, clean);
         SetPassword(u, password);
         lock (gate)
@@ -209,14 +229,30 @@ public sealed class UserStore
 
     public string? SetAdmin(string id, bool admin)
     {
+        List<string> g;
+        lock (gate)
+        {
+            if (users.FirstOrDefault(x => x.Id == id) is not { } u) return "No such user.";
+            g = u.Groups.ToList();
+        }
+        return SetGroups(id, admin ? g.Append(AdminGroup) : g.Where(x => x != AdminGroup));
+    }
+
+    /// <summary>A user's groups (unknown ones ignored); being in Admin makes them an admin.</summary>
+    public string? SetGroups(string id, IEnumerable<string> groups)
+    {
         lock (gate)
         {
             var u = users.FirstOrDefault(x => x.Id == id);
             if (u == null) return "No such user.";
+            var g = Sorted(groups);
+            bool admin = g.Contains(AdminGroup);
             if (!admin && u.Admin && users.Count(x => x.Admin) == 1) return "That's the last admin.";
+            if (g.SequenceEqual(u.Groups) && admin == u.Admin) return null;
+            u.Groups = g;
             u.Admin = admin;
             Save();
-            ModuleLog.Server.Info($"User {u.Name}: {(admin ? "admin" : "basic")}");
+            ModuleLog.Server.Info($"User {u.Name}: {(g.Count > 0 ? string.Join(", ", g) : "no groups")}");
         }
         Changed?.Invoke();
         return null;

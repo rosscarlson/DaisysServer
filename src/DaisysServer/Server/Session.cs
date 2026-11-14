@@ -244,14 +244,14 @@ public sealed class Session
                 {
                     var profile = new JsonObject();
                     foreach (var f in UserStore.Fields) profile[f.Key] = u.Get(f.Key);
-                    list.Add(new JsonObject { ["id"] = u.Id, ["name"] = u.Name, ["admin"] = u.Admin, ["created"] = u.Created, ["lastSignIn"] = u.LastSignIn, ["profile"] = profile });
+                    list.Add(new JsonObject { ["id"] = u.Id, ["name"] = u.Name, ["admin"] = u.Admin, ["created"] = u.Created, ["lastSignIn"] = u.LastSignIn, ["profile"] = profile, ["groups"] = new JsonArray(u.Groups.Select(g => (JsonNode)g).ToArray()) });
                 }
                 var fields = new JsonArray();
                 foreach (var f in UserStore.Fields) fields.Add(new JsonObject { ["key"] = f.Key, ["label"] = f.Label, ["max"] = f.Max });
-                Reply(m, new JsonObject { ["op"] = "users", ["users"] = list, ["fields"] = fields });
+                Reply(m, new JsonObject { ["op"] = "users", ["users"] = list, ["fields"] = fields, ["groups"] = new JsonArray(UserStore.Groups.Select(g => (JsonNode)g).ToArray()) });
                 return;
             case "useradd":
-                if (server.Users.Add(Str(m, "name"), Str(m, "password"), (bool?)m["admin"] == true, Profile(m)) is { } notAdded) { Error(m, notAdded); return; }
+                if (server.Users.Add(Str(m, "name"), Str(m, "password"), (bool?)m["admin"] == true, Profile(m), Groups(m)) is { } notAdded) { Error(m, notAdded); return; }
                 // their token, made with them (since 0.2.2)
                 var added = server.Users.All().First(x => x.Name.Equals(Str(m, "name").Trim(), StringComparison.OrdinalIgnoreCase));
                 Reply(m, new JsonObject { ["op"] = op, ["token"] = server.Tokens.Create(added.Name, added.Id) });
@@ -260,7 +260,10 @@ public sealed class Session
                 if (server.Users.All().FirstOrDefault(x => x.Id == Str(m, "id")) is not { } holder) { Error(m, "No such user."); return; }
                 Reply(m, new JsonObject { ["op"] = op, ["token"] = server.Tokens.Create(holder.Name, holder.Id) });
                 return;
-            case "useredit": problem = server.Users.Edit(Str(m, "id"), m["name"] is JsonValue ? Str(m, "name") : null, Profile(m) ?? new()); break;
+            case "useredit":
+                problem = server.Users.Edit(Str(m, "id"), m["name"] is JsonValue ? Str(m, "name") : null, Profile(m) ?? new());
+                if (problem == null && Groups(m) is { } groups) problem = server.Users.SetGroups(Str(m, "id"), groups);
+                break;
             case "userdelete": problem = Str(m, "id") == user.Id ? "You can't delete yourself." : server.Users.Delete(Str(m, "id")); break;
             case "useradmin": problem = server.Users.SetAdmin(Str(m, "id"), (bool?)m["admin"] == true); break;
             case "userpassword": problem = server.Users.ResetPassword(Str(m, "id"), Str(m, "password")); break;
@@ -273,6 +276,10 @@ public sealed class Session
     /// <summary>The message's <c>profile</c> object as strings (useradd, useredit).</summary>
     private static Dictionary<string, string>? Profile(JsonObject m) =>
         m["profile"] is JsonObject p ? p.Where(kv => kv.Value is JsonValue).ToDictionary(kv => kv.Key, kv => Str(p, kv.Key)) : null;
+
+    /// <summary>The message's <c>groups</c> array (useradd, useredit; since 0.2.3).</summary>
+    private static List<string>? Groups(JsonObject m) =>
+        m["groups"] is JsonArray a ? a.OfType<JsonValue>().Select(v => v.TryGetValue<string>(out var g) ? g : "").ToList() : null;
 
     /// <summary>{op: "open", ch, module, from}: a channel to one of the modules, if it's here and switched on.</summary>
     private void OpenChannel(JsonObject m, ServerUser user)

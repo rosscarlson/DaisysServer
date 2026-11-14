@@ -6,33 +6,36 @@ using DaisysServer.Server;
 namespace DaisysServer.Pages;
 
 /// <summary>
-/// Users and their tokens. One form adds a user (user name, password twice, the profile fields, admin; a token is made
+/// Users and their tokens. One form adds a user (user name, password twice, the profile fields, groups; a token is made
 /// with them and copied) or, after a row's Edit, edits one: Update saves it (a new password deletes their data, so then
-/// it's a two-click Confirm?), and Add, once something's changed, makes a new user from it. Each row: Edit, New token,
-/// Delete, and the user's tokens (hidden; Copy, Revoke). Tokens made before 0.2.2 are for anyone: tie them to a user.
-/// The profile's boxes come from <see cref="UserStore.Fields"/>. Buttons are icons, their tooltips saying what they do.
+/// it's a two-click Confirm?), and Add, once something's changed, makes a new user from it. Editing, the Token row has
+/// their token hidden, Copy, and Replace (or New token when they've none). Each row: Edit, Delete. Tokens made before
+/// 0.2.2 are for anyone: tie them to a user. The profile's boxes come from <see cref="UserStore.Fields"/>, the groups
+/// from <see cref="UserStore.Groups"/>. Buttons are icons, their tooltips saying what they do; no help text (the README).
 /// </summary>
 internal sealed class UsersPage : UserControl
 {
+    // the two password boxes side by side, everything else as wide as both
+    private const double Half = 146, Gap = 8, Wide = Half * 2 + Gap;
     private readonly ServerHost server;
     private readonly StackPanel list = new(), anyone = new();
     private readonly Border anyoneCard;
-    private readonly TextBlock header = Ui.Header("Add a user"), result = Ui.Secondary(), passwordNote = Ui.Secondary("Empty keeps it. A new one deletes their data: it's sealed with their old password (to keep it, they change it from a client).");
-    private readonly TextBox name = new() { Width = 220 };
-    private readonly PasswordBox password = new() { Width = 220 }, confirm = new() { Width = 220 };
+    private readonly TextBlock header = Ui.Header("Add a user"), result = Ui.Secondary();
+    private readonly TextBox name = new() { Width = Wide };
+    private readonly PasswordBox password = new() { Width = Half }, confirm = new() { Width = Half, Margin = new Thickness(Gap, 0, 0, 0) };
     private readonly Dictionary<string, TextBox> profile;
-    private readonly CheckBox admin = new() { Content = "Admin (can manage users from a client too)", Margin = new Thickness(130, 0, 0, 8) };
-    private readonly Button add, update, updateReset, cancel;
-    private readonly FrameworkElement form;
+    private readonly MultiPick groups = new(UserStore.Groups, "Groups") { Width = Wide };
+    private readonly TextBox token = new() { IsReadOnly = true, IsTabStop = false };
+    private readonly Button add, update, updateReset, cancel, copyToken, replaceToken, newToken;
+    private readonly FrameworkElement form, tokenRow;
     private UserStore.User? editing;
 
     public UsersPage(ServerHost server)
     {
         this.server = server;
-        admin.IsChecked = !server.Users.Any();
         profile = UserStore.Fields.ToDictionary(f => f.Key, f =>
         {
-            var box = new TextBox { Width = 220, MaxLength = f.Max, ToolTip = f.Tip };
+            var box = new TextBox { Width = Wide, MaxLength = f.Max, ToolTip = f.Tip };
             System.Windows.Automation.AutomationProperties.SetName(box, f.Label);
             box.TextChanged += (_, _) => Buttons();
             return box;
@@ -40,42 +43,44 @@ internal sealed class UsersPage : UserControl
         System.Windows.Automation.AutomationProperties.SetName(name, "User name");
         System.Windows.Automation.AutomationProperties.SetName(password, "Password");
         System.Windows.Automation.AutomationProperties.SetName(confirm, "Password again");
+        System.Windows.Automation.AutomationProperties.SetName(token, "Token");
+        password.ToolTip = "Editing, empty keeps it";
         confirm.ToolTip = "The password again";
         name.TextChanged += (_, _) => Buttons();
         password.PasswordChanged += (_, _) => Buttons();
         confirm.PasswordChanged += (_, _) => Buttons();
-        admin.Checked += (_, _) => Buttons();
-        admin.Unchecked += (_, _) => Buttons();
+        groups.Changed += Buttons;
 
-        add = Ui.Button("", "", "Add user (a token is made with them, and copied)", AddUser, accent: true);
+        add = Ui.Button("", "", "Add user (their token is copied)", AddUser, accent: true);
         update = Ui.Button("", "", "Update", () => Update(), accent: true);
         updateReset = Ui.Confirm("", "", "Update, with the new password: their data is deleted", () => Update());
         cancel = Ui.Button("", "", "Stop editing", Clear);
         foreach (var b in new[] { update, updateReset, cancel }) b.Margin = new Thickness(8, 0, 0, 0);
         result.Margin = new Thickness(12, 0, 0, 0);
         result.VerticalAlignment = VerticalAlignment.Center;
-        passwordNote.Margin = new Thickness(130, -4, 0, 8);
-        passwordNote.TextWrapping = TextWrapping.Wrap;
-        passwordNote.MaxWidth = 520;
-        passwordNote.HorizontalAlignment = HorizontalAlignment.Left;
+
+        copyToken = Ui.Button("", "", "Copy the token", () => { if (editing is { } u) { Copy(Newest(u)); Show("Token copied.", false); } });
+        replaceToken = Ui.Confirm("", "", "Replace the token (copied): the old one stops working", () => { if (editing is { } u) MakeToken(u, true); });
+        newToken = Ui.Button("", "", "Make a token (copied)", () => { if (editing is { } u) MakeToken(u, false); });
+        var tokenLine = new DockPanel { Width = Wide };
+        foreach (var b in new[] { newToken, replaceToken, copyToken })
+        {
+            b.Margin = new Thickness(Gap, 0, 0, 0);
+            DockPanel.SetDock(b, Dock.Right);
+            tokenLine.Children.Add(b);
+        }
+        tokenLine.Children.Add(token);
 
         var fields = new StackPanel();
         fields.Children.Add(header);
         fields.Children.Add(Ui.Row(Ui.Label("User name"), name));
-        var again = Ui.Label("Again", 50);
-        again.Margin = new Thickness(12, 0, 0, 0);
-        fields.Children.Add(Ui.Row(Ui.Label("Password"), password, again, confirm));
-        fields.Children.Add(passwordNote);
+        fields.Children.Add(Ui.Row(Ui.Label("Password"), password, confirm));
         foreach (var f in UserStore.Fields) fields.Children.Add(Ui.Row(Ui.Label(f.Label), profile[f.Key]));
-        fields.Children.Add(admin);
+        fields.Children.Add(tokenRow = Ui.Row(Ui.Label("Token"), tokenLine));
+        fields.Children.Add(Ui.Row(Ui.Label("Groups"), groups));
         var buttons = Ui.Row(add, update, updateReset, cancel, result);
         buttons.Margin = new Thickness(130, 0, 0, 0);
         fields.Children.Add(buttons);
-        var note = Ui.Secondary("A client needs this server's address and port, the user's token (to connect: only they can sign in with it), " +
-                                "and their name and password. The password makes the key their data is sealed with, on their clients: the server never has it.");
-        note.TextWrapping = TextWrapping.Wrap;
-        note.Margin = new Thickness(0, 6, 0, 0);
-        fields.Children.Add(note);
         form = Ui.Card(fields);
 
         var users = new StackPanel();
@@ -83,9 +88,6 @@ internal sealed class UsersPage : UserControl
         users.Children.Add(list);
         var older = new StackPanel();
         older.Children.Add(Ui.Header("Tokens for anyone"));
-        var olderNote = Ui.Secondary("Made before tokens belonged to users: any user can sign in with these. Tie each to its user, or revoke it.");
-        olderNote.Margin = new Thickness(0, 0, 0, 8);
-        older.Children.Add(olderNote);
         older.Children.Add(anyone);
         anyoneCard = Ui.Card(older);
         Content = Ui.Page(form, Ui.Card(users), anyoneCard);
@@ -99,7 +101,7 @@ internal sealed class UsersPage : UserControl
     private Dictionary<string, string> Values() => profile.ToDictionary(kv => kv.Key, kv => kv.Value.Text);
 
     /// <summary>Whether the form differs from the user being edited.</summary>
-    private bool Changed() => editing is { } u && (name.Text.Trim() != u.Name || (admin.IsChecked == true) != u.Admin || password.Password.Length > 0
+    private bool Changed() => editing is { } u && (name.Text.Trim() != u.Name || !groups.Selected.SequenceEqual(u.Groups) || password.Password.Length > 0
         || UserStore.Fields.Any(f => profile[f.Key].Text.Trim() != u.Get(f.Key)));
 
     private void Buttons()
@@ -112,7 +114,25 @@ internal sealed class UsersPage : UserControl
         update.Visibility = edit && password.Password.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         updateReset.Visibility = edit && password.Password.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         update.IsEnabled = updateReset.IsEnabled = changed;
-        cancel.Visibility = passwordNote.Visibility = edit ? Visibility.Visible : Visibility.Collapsed;
+        cancel.Visibility = tokenRow.Visibility = edit ? Visibility.Visible : Visibility.Collapsed;
+        if (editing is not { } u) return;
+        bool has = Newest(u) != null;
+        token.Text = has ? new string('•', 24) : "";
+        copyToken.IsEnabled = has;
+        replaceToken.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
+        newToken.Visibility = has ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>The user's newest token, or null.</summary>
+    private string? Newest(UserStore.User u) =>
+        server.Tokens.All().Where(t => t.UserId == u.Id).OrderByDescending(t => t.Created).FirstOrDefault() is { } t ? server.Tokens.Text(t.Id) : null;
+
+    /// <summary>A token for them, copied; replacing, their others are revoked first.</summary>
+    private void MakeToken(UserStore.User u, bool replace)
+    {
+        if (replace) server.Tokens.RevokeFor(u.Id);
+        Copy(server.Tokens.Create(u.Name, u.Id));
+        Show(replace ? "Token replaced and copied." : "Token made and copied.", false);
     }
 
     /// <summary>The form back to adding, empty.</summary>
@@ -124,7 +144,8 @@ internal sealed class UsersPage : UserControl
         password.Clear();
         confirm.Clear();
         foreach (var box in profile.Values) box.Clear();
-        admin.IsChecked = !server.Users.Any();
+        // the first user is the admin
+        groups.Selected = server.Users.Any() ? [UserStore.UserGroup] : [UserStore.AdminGroup, UserStore.UserGroup];
         Buttons();
     }
 
@@ -136,7 +157,7 @@ internal sealed class UsersPage : UserControl
         password.Clear();
         confirm.Clear();
         foreach (var f in UserStore.Fields) profile[f.Key].Text = u.Get(f.Key);
-        admin.IsChecked = u.Admin;
+        groups.Selected = u.Groups;
         Show("", false);
         Buttons();
         form.BringIntoView();
@@ -147,20 +168,20 @@ internal sealed class UsersPage : UserControl
 
     private void AddUser()
     {
-        string? problem = Mismatch() ?? server.Users.Add(name.Text, password.Password, admin.IsChecked == true, Values());
+        string? problem = Mismatch() ?? server.Users.Add(name.Text, password.Password, false, Values(), groups.Selected);
         if (problem != null) { Show(problem, true); return; }
         string added = name.Text.Trim();
         var u = server.Users.All().First(x => x.Name.Equals(added, StringComparison.OrdinalIgnoreCase));
         Copy(server.Tokens.Create(u.Name, u.Id));
         Clear();
-        Show($"{added} added. Their token is copied, to paste into their client.", false);
+        Show($"{added} added; token copied.", false);
     }
 
     private void Update()
     {
         if (editing is not { } u) return;
         string? problem = Mismatch() ?? server.Users.Edit(u.Id, name.Text, Values());
-        if (problem == null && (admin.IsChecked == true) != u.Admin) problem = server.Users.SetAdmin(u.Id, admin.IsChecked == true);
+        if (problem == null && !groups.Selected.SequenceEqual(u.Groups)) problem = server.Users.SetGroups(u.Id, groups.Selected);
         if (problem == null && password.Password.Length > 0) problem = server.Users.ResetPassword(u.Id, password.Password);
         if (problem != null) { Show(problem, true); return; }
         string updated = name.Text.Trim();
@@ -180,26 +201,6 @@ internal sealed class UsersPage : UserControl
         return e;
     }
 
-    /// <summary>A token's line: hidden, when it was made and last used, and its buttons (Copy, Revoke, and any more).</summary>
-    private DockPanel TokenLine(TokenStore.Entry t, string label, params FrameworkElement[] more)
-    {
-        var line = new DockPanel { Margin = new Thickness(16, 4, 0, 0) };
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        foreach (var m in more) actions.Children.Add(Spaced(m));
-        actions.Children.Add(Spaced(Ui.Button("", "", "Copy the token, to paste into their client", () => { Copy(server.Tokens.Text(t.Id)); Show("Token copied.", false); })));
-        actions.Children.Add(Spaced(Ui.Confirm("", "", "Revoke: nobody can connect with it any more; its connections are dropped", () => server.Tokens.Revoke(t.Id))));
-        DockPanel.SetDock(actions, Dock.Right);
-        line.Children.Add(actions);
-        var about = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        var glyph = Ui.Glyph("", 12);
-        glyph.Margin = new Thickness(0, 0, 8, 0);
-        about.Children.Add(glyph);
-        about.Children.Add(new TextBlock { Text = "••••••••••••", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) });
-        about.Children.Add(Ui.Secondary($"{label}made {t.Created.ToLocalTime():d MMM yyyy} · last used {Ui.Ago(t.LastUsed)}"));
-        line.Children.Add(about);
-        return line;
-    }
-
     private void Refresh()
     {
         list.Children.Clear();
@@ -209,46 +210,40 @@ internal sealed class UsersPage : UserControl
         if (all.Count == 0) list.Children.Add(Ui.Secondary("No users yet."));
         foreach (var u in all)
         {
-            var row = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
-            var line = new DockPanel();
+            var line = new DockPanel { Margin = new Thickness(0, 0, 0, 12) };
             var who = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
             string shown = u.DisplayName != u.Name ? $"{u.DisplayName} ({u.Name})" : u.Name;
-            who.Children.Add(new TextBlock { Text = shown + (u.Admin ? "  ·  admin" : ""), FontWeight = FontWeights.SemiBold });
+            who.Children.Add(new TextBlock { Text = shown + (u.Groups.Count > 0 ? "  ·  " + string.Join(", ", u.Groups) : ""), FontWeight = FontWeights.SemiBold });
             string email = u.Get("email") is { Length: > 0 } e ? e + " · " : "";
-            who.Children.Add(Ui.Secondary($"{email}Added {u.Created.ToLocalTime():d MMM yyyy} · last signed in {Ui.Ago(u.LastSignIn)}{(u.Vault == null ? " · not signed in yet" : "")}"));
+            who.Children.Add(Ui.Secondary($"{email}Added {u.Created.ToLocalTime():d MMM yyyy} · last signed in {Ui.Ago(u.LastSignIn)}"));
             var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             actions.Children.Add(Ui.Button("", "", "Edit", () => Edit(u)));
-            actions.Children.Add(Spaced(Ui.Button("", "", "New token for them (copied)", () =>
-            {
-                Copy(server.Tokens.Create(u.Name, u.Id));
-                Show($"A new token for {u.Name} is copied.", false);
-            })));
             actions.Children.Add(Spaced(Ui.Confirm("", "", "Delete the user, their tokens and everything kept for them", () => Show(server.Users.Delete(u.Id)))));
             DockPanel.SetDock(actions, Dock.Right);
             line.Children.Add(actions);
             line.Children.Add(who);
-            row.Children.Add(line);
-            var theirs = tokens.Where(t => t.UserId == u.Id).ToList();
-            foreach (var t in theirs) row.Children.Add(TokenLine(t, ""));
-            if (theirs.Count == 0)
-            {
-                var none = Ui.Secondary(tokens.Any(t => t.UserId.Length == 0) ? "No token of their own: they connect with a token for anyone (below)" : "No token: they can't connect");
-                none.Margin = new Thickness(16, 4, 0, 0);
-                row.Children.Add(none);
-            }
-            list.Children.Add(row);
+            list.Children.Add(line);
         }
+        // the user being edited: their token may have changed
+        if (editing is { } ed && all.FirstOrDefault(u => u.Id == ed.Id) is { } fresh) editing = fresh;
+        Buttons();
 
         anyone.Children.Clear();
         var loose = tokens.Where(t => t.UserId.Length == 0).ToList();
         anyoneCard.Visibility = loose.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         foreach (var t in loose)
         {
-            var tie = new ComboBox { Width = 160, ItemsSource = all, DisplayMemberPath = nameof(UserStore.User.Name), ToolTip = "Tie it to a user: only they can sign in with it" };
+            var line = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var tie = new ComboBox { Width = 160, ItemsSource = all, DisplayMemberPath = nameof(UserStore.User.Name), ToolTip = "Tie it to a user" };
             System.Windows.Automation.AutomationProperties.SetName(tie, "Tie to");
             tie.SelectionChanged += (_, _) => { if (tie.SelectedItem is UserStore.User u) server.Tokens.Assign(t.Id, u.Id, u.Name); };
-            var line = TokenLine(t, $"{t.Name} · ", tie);
-            line.Margin = new Thickness(0, 4, 0, 0);
+            actions.Children.Add(tie);
+            actions.Children.Add(Spaced(Ui.Button("", "", "Copy the token", () => { Copy(server.Tokens.Text(t.Id)); Show("Token copied.", false); })));
+            actions.Children.Add(Spaced(Ui.Confirm("", "", "Revoke", () => server.Tokens.Revoke(t.Id))));
+            DockPanel.SetDock(actions, Dock.Right);
+            line.Children.Add(actions);
+            line.Children.Add(new TextBlock { Text = $"{t.Name} · ••••••••••••", VerticalAlignment = VerticalAlignment.Center });
             anyone.Children.Add(line);
         }
     }
