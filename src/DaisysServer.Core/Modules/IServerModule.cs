@@ -16,8 +16,9 @@ public sealed class ServerModuleAttribute(string id, string name) : Attribute
     public string Icon { get; init; } = "";
 }
 
-/// <summary>A signed-in user, as a module sees them: their data is theirs alone (<see cref="IModuleHost.FolderFor"/>).</summary>
-public sealed record ServerUser(string Id, string Name, bool Admin);
+/// <summary>A signed-in user, as a module sees them: their data is theirs alone (<see cref="IModuleHost.FolderFor"/>).
+/// (Since 0.2.4) <paramref name="DisplayName"/>: what others see (their name when they haven't one).</summary>
+public sealed record ServerUser(string Id, string Name, bool Admin, string DisplayName = "");
 
 /// <summary>
 /// A server module: a class library in modules\&lt;Name&gt;\DaisysServer.&lt;Name&gt;.dll with one class implementing this,

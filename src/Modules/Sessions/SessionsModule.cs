@@ -21,7 +21,7 @@ public sealed class SessionsModule : IServerModule
     public void Start(IModuleHost host)
     {
         this.host = host;
-        store = new SessionStore(host.Log);
+        store = new SessionStore(host.Log, () => host.Users);
     }
 
     public FrameworkElement? View => page ??= new SessionsPage(store, () => host.Users);

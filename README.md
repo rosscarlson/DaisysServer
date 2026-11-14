@@ -1,6 +1,6 @@
 # Daisy's Server
 
-**Version 0.2.3**
+**Version 0.2.4**
 
 A central server for Daisy's App's clients: Daisy's App on your PCs, Daisy's App Mobile, and whatever comes next. Their
 modules keep data on it and talk to each other through it, live, over the internet as well as at home.

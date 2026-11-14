@@ -75,9 +75,13 @@ internal sealed class SessionStore
     /// <summary>A session or a ban came, changed or went (any thread).</summary>
     public event Action? Changed;
 
-    public SessionStore(ModuleLog log)
+    /// <summary>(since 0.2.4) The users now: each session's sharer named by their display name as it is when it's sent.</summary>
+    private readonly Func<IReadOnlyList<ServerUser>> users;
+
+    public SessionStore(ModuleLog log, Func<IReadOnlyList<ServerUser>> users)
     {
         this.log = log;
+        this.users = users;
         folder = Path.Combine(JsonFile.DataFolder, "sessions");
         indexFile = Path.Combine(folder, "sessions.json");
         bansFile = Path.Combine(folder, "bans.json");
@@ -139,28 +143,40 @@ internal sealed class SessionStore
         }
     }
 
-    /// <summary>The meta a channel's user is sent: the client's fields, the server's, and mine (theirs or not); not
-    /// where it came from.</summary>
-    private static JsonObject MetaFor(JsonObject s, IModuleChannel to)
+    /// <summary>The meta a channel's user is sent: the client's fields, the server's, mine (theirs or not) and (since
+    /// 0.2.4) displayName, the sharer's now (looked up by their id: only their user name is kept); not where it came
+    /// from.</summary>
+    private static JsonObject MetaFor(JsonObject s, IModuleChannel to, IReadOnlyDictionary<string, string> names)
     {
         var m = new JsonObject();
         foreach (var (k, v) in s)
             if (k is not ("userId" or "address" or "tokenId" or "token")) m[k] = v?.DeepClone();
         m["mine"] = Str(s, "userId") == to.User.Id;
+        if (names.TryGetValue(Str(s, "userId"), out var name)) m["displayName"] = name;
         return m;
+    }
+
+    /// <summary>(since 0.2.4) Each user's display name, by their id.</summary>
+    private Dictionary<string, string> Names()
+    {
+        var names = new Dictionary<string, string>();
+        foreach (var u in users()) names[u.Id] = u.DisplayName.Length > 0 ? u.DisplayName : u.Name;
+        return names;
     }
 
     private void Push(string op, JsonObject? session, string? id = null)
     {
+        var names = session != null ? Names() : new Dictionary<string, string>();
         foreach (var p in peers)
-            p.Channel.Post(session != null ? new JsonObject { ["op"] = op, ["session"] = MetaFor(session, p.Channel) } : new JsonObject { ["op"] = op, ["id"] = id });
+            p.Channel.Post(session != null ? new JsonObject { ["op"] = op, ["session"] = MetaFor(session, p.Channel, names) } : new JsonObject { ["op"] = op, ["id"] = id });
     }
 
     // ---------------------------------------------------------------- what clients ask
 
     public JsonArray List(IModuleChannel to)
     {
-        lock (gate) return new JsonArray(sessions.Values.OrderByDescending(s => Long(s, "shared")).Select(s => (JsonNode)MetaFor(s, to)).ToArray());
+        var names = Names();
+        lock (gate) return new JsonArray(sessions.Values.OrderByDescending(s => Long(s, "shared")).Select(s => (JsonNode)MetaFor(s, to, names)).ToArray());
     }
 
     /// <summary>A share begins: its id, or the problem.</summary>
@@ -274,7 +290,7 @@ internal sealed class SessionStore
             Save();
         }
         log.Info($"{c.User.Name} on {c.Client} ({c.Address}) changed {id}: \"{Str(s, "title")}\"");
-        return (MetaFor(s, c), null);
+        return (MetaFor(s, c, Names()), null);
     }
 
     /// <summary>The sharer (or an admin) takes one off: null, or the problem.</summary>

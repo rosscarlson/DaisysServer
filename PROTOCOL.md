@@ -296,7 +296,9 @@ people). Questions are answered in order.
   client, shared, size, mine}`. The client sends the first thirteen but `id` (fields the server doesn't know are kept
   as they came); the server sets `id` (16 hex characters), `user` (the sharer's name), `client` (their PC), `shared`
   (ms since 1970, UTC, when it was completed) and `size`, whatever the client says. `mine` is worked out for each
-  recipient: true when they shared it. `started` is ms since 1970, UTC; `best` seconds (0 for none); `videoAt` seconds
+  recipient: true when they shared it. `displayName` (since 0.2.4) is the sharer's display name (their user name
+  when they haven't one) as it is when the meta is sent, looked up by who shared it: it isn't kept, so a new display
+  name shows on every session (Daisy's App 4.17.21 sends no `driver`, and names the sharer by it). `started` is ms since 1970, UTC; `best` seconds (0 for none); `videoAt` seconds
   or null. `video` must be an `https://` link (anything else is kept as null). Text is clipped (a title to 200
   characters, a description to 4000).
 - **Who:** any signed-in user can `list`, `get` and `share`. Only the sharer, or an admin, can `edit` or `delete`;

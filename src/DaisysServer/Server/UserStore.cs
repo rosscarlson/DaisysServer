@@ -33,7 +33,7 @@ public sealed class UserStore
 
         public string Get(string key) => Profile.TryGetValue(key, out var v) ? v : "";
         public string DisplayName => Get("displayName") is { Length: > 0 } d ? d : Name;
-        public ServerUser ToServerUser() => new(Id, Name, Admin);
+        public ServerUser ToServerUser() => new(Id, Name, Admin, DisplayName);
         public override string ToString() => Name;
 
         public User Copy()
