@@ -233,10 +233,17 @@ public sealed class Session
             case "users":
                 var list = new JsonArray();
                 foreach (var u in server.Users.All())
-                    list.Add(new JsonObject { ["id"] = u.Id, ["name"] = u.Name, ["admin"] = u.Admin, ["created"] = u.Created, ["lastSignIn"] = u.LastSignIn });
-                Reply(m, new JsonObject { ["op"] = "users", ["users"] = list });
+                {
+                    var profile = new JsonObject();
+                    foreach (var f in UserStore.Fields) profile[f.Key] = u.Get(f.Key);
+                    list.Add(new JsonObject { ["id"] = u.Id, ["name"] = u.Name, ["admin"] = u.Admin, ["created"] = u.Created, ["lastSignIn"] = u.LastSignIn, ["profile"] = profile });
+                }
+                var fields = new JsonArray();
+                foreach (var f in UserStore.Fields) fields.Add(new JsonObject { ["key"] = f.Key, ["label"] = f.Label, ["max"] = f.Max });
+                Reply(m, new JsonObject { ["op"] = "users", ["users"] = list, ["fields"] = fields });
                 return;
-            case "useradd": problem = server.Users.Add(Str(m, "name"), Str(m, "password"), (bool?)m["admin"] == true); break;
+            case "useradd": problem = server.Users.Add(Str(m, "name"), Str(m, "password"), (bool?)m["admin"] == true, Profile(m)); break;
+            case "useredit": problem = server.Users.Edit(Str(m, "id"), m["name"] is JsonValue ? Str(m, "name") : null, Profile(m) ?? new()); break;
             case "userdelete": problem = Str(m, "id") == user.Id ? "You can't delete yourself." : server.Users.Delete(Str(m, "id")); break;
             case "useradmin": problem = server.Users.SetAdmin(Str(m, "id"), (bool?)m["admin"] == true); break;
             case "userpassword": problem = server.Users.ResetPassword(Str(m, "id"), Str(m, "password")); break;
@@ -245,6 +252,10 @@ public sealed class Session
         if (problem != null) Error(m, problem);
         else Reply(m, new JsonObject { ["op"] = op });
     }
+
+    /// <summary>The message's <c>profile</c> object as strings (useradd, useredit).</summary>
+    private static Dictionary<string, string>? Profile(JsonObject m) =>
+        m["profile"] is JsonObject p ? p.Where(kv => kv.Value is JsonValue).ToDictionary(kv => kv.Key, kv => Str(p, kv.Key)) : null;
 
     /// <summary>{op: "open", ch, module, from}: a channel to one of the modules, if it's here and switched on.</summary>
     private void OpenChannel(JsonObject m, ServerUser user)

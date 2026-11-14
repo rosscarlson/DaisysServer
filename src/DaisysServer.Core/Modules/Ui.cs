@@ -46,10 +46,12 @@ public static class Ui
     {
         var content = new StackPanel { Orientation = Orientation.Horizontal };
         if (glyph.Length > 0) content.Children.Add(Glyph(glyph, 13));
-        content.Children.Add(new TextBlock { Text = text, Margin = new Thickness(glyph.Length > 0 ? 8 : 0, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
+        // no text: an icon, its tooltip saying what it does
+        if (text.Length > 0 || glyph.Length == 0)
+            content.Children.Add(new TextBlock { Text = text, Margin = new Thickness(glyph.Length > 0 ? 8 : 0, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
         var b = new Button { Content = content, ToolTip = tip, HorizontalAlignment = HorizontalAlignment.Left };
         if (accent) b.SetResourceReference(FrameworkElement.StyleProperty, "AccentButton");
-        System.Windows.Automation.AutomationProperties.SetName(b, text);
+        System.Windows.Automation.AutomationProperties.SetName(b, text.Length > 0 ? text : tip ?? "");
         b.Click += (_, _) => click();
         return b;
     }

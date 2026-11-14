@@ -100,8 +100,9 @@ Every question can carry a `"rid"` (a number). Its answer, or its `error`, carri
 | `{"op": "open", "ch": n, "module": "<server module id>", "from": "<client module id>"}` | `{"op": "opened", "ch"}`, or an `error`: the server doesn't have that module, or it's switched off there. |
 | `{"op": "close", "ch"}` | Ends a channel. Not answered. |
 | `{"op": "password", …}` | See above. |
-| **Admins only:** `{"op": "users"}` | `{"op": "users", "users": [{id, name, admin, created, lastSignIn}]}` |
-| `{"op": "useradd", "name", "password", "admin"}` | `{"op": "useradd"}`. The password goes over the encrypted connection, and the server makes the verifier from it. |
+| **Admins only:** `{"op": "users"}` | `{"op": "users", "users": [{id, name, admin, created, lastSignIn, profile}], "fields": [{key, label, max}]}`. Since 0.2.1, `fields` lists the profile fields (now `displayName` and `email`; more may come, so show what's listed), and each user's `profile` has a string for each (empty when unset). |
+| `{"op": "useradd", "name", "password", "admin", "profile"}` | `{"op": "useradd"}`. The password goes over the encrypted connection, and the server makes the verifier from it. `profile` (since 0.2.1, optional): `{key: value}` for the fields. |
+| `{"op": "useredit", "id", "name", "profile"}` (since 0.2.1) | `{"op": "useredit"}`, or an `error` (a name taken, a bad email). `name` (optional) renames them: their password and data stay. `profile` sets the fields given (an empty string clears one); keys the server doesn't know are ignored. |
 | `{"op": "userdelete", "id"}`, `{"op": "useradmin", "id", "admin"}`, `{"op": "userpassword", "id", "password"}` | Their op echoed back, or an `error`. `userpassword` deletes the user's data (see above). |
 
 The server can send these at any time:

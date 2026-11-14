@@ -194,6 +194,35 @@ c2.Dispose();
 try { await b.ChangePasswordAsync("not it", "whatever123"); Check(false, "a wrong current password can't change it"); }
 catch (ServerException ex) { Check(true, "a wrong current password can't change it: " + ex.Message); }
 
+// users: the profile fields (an admin's ops)
+{
+    async Task<string?> Problem(JsonObject q) { try { await a.AskAsync(q); return null; } catch (ServerException ex) { return ex.Message; } }
+    JsonObject Me(JsonObject list) => (list["users"] as JsonArray)!.OfType<JsonObject>().First(x => ServerClient.Str(x, "name").Equals(a.User, StringComparison.OrdinalIgnoreCase));
+    var listed = await a.AskAsync(new JsonObject { ["op"] = "users" });
+    var keys = (listed["fields"] as JsonArray)!.OfType<JsonObject>().Select(f => ServerClient.Str(f, "key")).ToList();
+    Check(keys.Contains("displayName") && keys.Contains("email") && Me(listed)["profile"] is JsonObject, "users: the fields (" + string.Join(", ", keys) + ") and each user's profile");
+    string uid = ServerClient.Str(Me(listed), "id");
+    var edited = await Problem(new JsonObject { ["op"] = "useredit", ["id"] = uid, ["profile"] = new JsonObject { ["displayName"] = " Test Person ", ["email"] = "test@example.com", ["nosuch"] = "x" } });
+    var p = Me(await a.AskAsync(new JsonObject { ["op"] = "users" }))["profile"] as JsonObject;
+    Check(edited == null && ServerClient.Str(p!, "displayName") == "Test Person" && ServerClient.Str(p!, "email") == "test@example.com" && p!["nosuch"] == null,
+        "users: useredit sets the display name (trimmed) and email, unknown fields ignored " + edited);
+    string? badEmail = await Problem(new JsonObject { ["op"] = "useredit", ["id"] = uid, ["profile"] = new JsonObject { ["email"] = "not an email" } });
+    Check(badEmail != null, "users: a bad email refused: " + badEmail);
+    string? taken = await Problem(new JsonObject { ["op"] = "useredit", ["id"] = uid, ["name"] = user + "-basic" });
+    Check(taken != null, "users: another user's name refused: " + taken);
+    Check(await Problem(new JsonObject { ["op"] = "useredit", ["id"] = uid, ["name"] = user + "-renamed" }) == null, "users: renamed");
+    var renamed = await ServerClient.ConnectAsync(host, port, token, user + "-renamed", password, "TestClient-R", "TestClient", default);
+    Check(renamed.DataKey.SequenceEqual(a.DataKey), "users: the renamed user signs in with their password and opens the same data key");
+    renamed.Dispose();
+    await a.AskAsync(new JsonObject { ["op"] = "useredit", ["id"] = uid, ["name"] = user, ["profile"] = new JsonObject { ["displayName"] = "", ["email"] = "" } });
+    p = Me(await a.AskAsync(new JsonObject { ["op"] = "users" }))["profile"] as JsonObject;
+    Check(ServerClient.Str(p!, "displayName") == "" && ServerClient.Str(p!, "email") == "", "users: renamed back, the fields cleared");
+    var basic = await ServerClient.ConnectAsync(host, port, token, user + "-basic", password, "TestClient-Basic", "TestClient", default);
+    try { await basic.AskAsync(new JsonObject { ["op"] = "useredit", ["id"] = uid, ["profile"] = new JsonObject { ["displayName"] = "x" } }); Check(false, "users: a basic user can't useredit"); }
+    catch (ServerException ex) { Check(true, "users: a basic user can't useredit: " + ex.Message); }
+    basic.Dispose();
+}
+
 if (a.Modules.Contains("files"))
 {
     var cf = await a.OpenAsync("files", "files");

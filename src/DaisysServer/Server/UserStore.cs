@@ -26,10 +26,31 @@ public sealed class UserStore
         public string? Vault { get; set; }
         public DateTime Created { get; set; }
         public DateTime? LastSignIn { get; set; }
+        /// <summary>The profile: a value for each of <see cref="Fields"/>' keys (missing ones are empty).</summary>
+        public Dictionary<string, string> Profile { get; set; } = new();
 
+        public string Get(string key) => Profile.TryGetValue(key, out var v) ? v : "";
+        public string DisplayName => Get("displayName") is { Length: > 0 } d ? d : Name;
         public ServerUser ToServerUser() => new(Id, Name, Admin);
-        public User Copy() => (User)MemberwiseClone();
+        public User Copy()
+        {
+            var c = (User)MemberwiseClone();
+            c.Profile = new Dictionary<string, string>(Profile);
+            return c;
+        }
     }
+
+    /// <summary>A profile field: its key (in users.json and on the wire), its label, a tooltip, its longest, and what's
+    /// wrong with a value (null when it's fine; empty is always fine).</summary>
+    public sealed record Field(string Key, string Label, string Tip, int Max, Func<string, string?>? Check = null);
+
+    /// <summary>The profile fields, in the order they're shown. A new one is a line here: the Users page, users.json
+    /// and the <c>users</c>/<c>useredit</c> ops all go by this list.</summary>
+    public static readonly IReadOnlyList<Field> Fields =
+    [
+        new("displayName", "Display name", "What others see; the user name if empty", 60),
+        new("email", "Email", "To reach them", 254, v => System.Net.Mail.MailAddress.TryCreate(v, out var a) && a.Address == v ? null : "That isn't an email address."),
+    ];
 
     private sealed class FileShape { public List<User> Users { get; set; } = new(); }
 
@@ -55,20 +76,25 @@ public sealed class UserStore
     private User? Find(string name) => users.FirstOrDefault(u => u.Name.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase));
     private void Save() => JsonFile.Save(FilePath, new FileShape { Users = users });
 
-    public static string? Problem(string name, string password)
+    public static string? Problem(string name, string password) =>
+        NameProblem(name) ?? (password.Length < 8 ? "A password is at least 8 characters." : null);
+
+    private static string? NameProblem(string name)
     {
         name = name.Trim();
         if (name.Length is 0 or > 40) return "A name is 1 to 40 characters.";
         if (name.Any(char.IsControl)) return "That name has characters it can't.";
-        if (password.Length < 8) return "A password is at least 8 characters.";
         return null;
     }
 
     /// <summary>Adds a user (the password made into the verifier here, then forgotten). Returns a problem, or null.</summary>
-    public string? Add(string name, string password, bool admin)
+    public string? Add(string name, string password, bool admin, IReadOnlyDictionary<string, string>? profile = null)
     {
         if (Problem(name, password) is { } p) return p;
+        var (clean, problem) = Clean(profile);
+        if (problem != null) return problem;
         var u = new User { Id = Guid.NewGuid().ToString("N")[..12], Name = name.Trim(), Admin = admin, Created = DateTime.UtcNow };
+        Apply(u, clean);
         SetPassword(u, password);
         lock (gate)
         {
@@ -126,6 +152,54 @@ public sealed class UserStore
         Removed?.Invoke(u.ToServerUser());
         Changed?.Invoke();
         return null;
+    }
+
+    /// <summary>A user's name and profile changed (only the keys given; unknown ones ignored). Their password and data
+    /// stay: the keys come from the password and a random salt, not the name.</summary>
+    public string? Edit(string id, string? name, IReadOnlyDictionary<string, string> profile)
+    {
+        var (clean, problem) = Clean(profile);
+        if (problem != null) return problem;
+        User? u;
+        lock (gate)
+        {
+            u = users.FirstOrDefault(x => x.Id == id);
+            if (u == null) return "No such user.";
+            if (name != null && name.Trim() != u.Name)
+            {
+                if (NameProblem(name) is { } p) return p;
+                if (Find(name) is { } other && other != u) return "There's a user with that name already.";
+                ModuleLog.Server.Info($"User {u.Name} renamed {name.Trim()}");
+                u.Name = name.Trim();
+            }
+            Apply(u, clean);
+            Save();
+        }
+        Changed?.Invoke();
+        return null;
+    }
+
+    /// <summary>The profile's values for the known fields, trimmed, or what's wrong with one.</summary>
+    private static (Dictionary<string, string> Clean, string? Problem) Clean(IReadOnlyDictionary<string, string>? profile)
+    {
+        var clean = new Dictionary<string, string>();
+        foreach (var f in Fields)
+        {
+            if (profile == null || !profile.TryGetValue(f.Key, out var v)) continue;
+            v = v.Trim();
+            if (v.Length > f.Max) return (clean, $"{f.Label} is at most {f.Max} characters.");
+            if (v.Any(char.IsControl)) return (clean, $"{f.Label} has characters it can't.");
+            if (v.Length > 0 && f.Check?.Invoke(v) is { } p) return (clean, p);
+            clean[f.Key] = v;
+        }
+        return (clean, null);
+    }
+
+    private static void Apply(User u, Dictionary<string, string> clean)
+    {
+        foreach (var (k, v) in clean)
+            if (v.Length > 0) u.Profile[k] = v;
+            else u.Profile.Remove(k);
     }
 
     public string? SetAdmin(string id, bool admin)

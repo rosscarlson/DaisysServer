@@ -1,6 +1,6 @@
 # Daisy's Server
 
-**Version 0.2.0**
+**Version 0.2.1**
 
 A central server for Daisy's App's clients: Daisy's App on your PCs, Daisy's App Mobile, and whatever comes next. Their
 modules keep data on it and talk to each other through it, live, over the internet as well as at home.
@@ -61,7 +61,7 @@ SmartScreen may warn you: choose **More info → Run anyway**. Everything it nee
 | Tab | |
 |---|---|
 | **Status** | Listening or not (**Start** / **Stop**), the addresses clients use, the steps to get going while there are no users or tokens yet, and who's connected: client, user, address, app, the modules it's using, and since when. |
-| **Users** | Add a user (name, password, admin). For each one: **Make admin / Make basic**, **New password…** (which deletes their data), and **Delete** (a two-click **Confirm?**). |
+| **Users** | Add a user (user name, password, display name, email, admin). For each one, as icons (point at one for what it does): **Edit** (user name, display name and email; renaming keeps their password and data, but their clients must sign in with the new name), **Make admin / Make basic**, **New password…** (which deletes their data), and **Delete** (a two-click **Confirm?**). The display name and email are kept on the server as written: they're how you know who's who, not sealed data. |
 | **Tokens** | **Make token** (named for who it's for), **Copy**, and **Revoke** (**Confirm?**). |
 | *a tab per module* | **Notepad**: each user's notes as kept (how many, their size, the changes since the last snapshot, when last changed) and the clients they're joined from. What the notes say isn't shown, because the server can't read it. **Processes**: the database's version, **Export…** and **Import…** (Daisy's App's export file; an import goes to every PC), the PCs (behind or up to date), and every program, with a search. **Sessions**: every session shared (when, title, driver, game, track, car, class, laps, best, user, PC, address, token, size, video) with their count and total size, a **Search** that looks for each word anywhere in a row, and, for the sessions picked (Ctrl+click or Shift+click for many): **Remove**, **Ban user**, **Ban PC**, **Ban address**, **Ban token** (each **Confirm?**; a ban removes every session it matches). Under it, **Banned from sharing**: each ban with **Unban**, and a box to ban a user, PC or address (or a range, like `203.0.113.0/24`) by hand. Someone banned can still browse and download. (**Files** has no tab: its settings are in Settings, and the **Log** shows each file opened.) |
 | **Log** | The server's and its modules' log, live. **Open folder** opens the files. |

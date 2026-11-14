@@ -30,7 +30,7 @@ public sealed class MainWindow : Window
     public MainWindow(ServerHost server)
     {
         this.server = server;
-        Title = "Daisy's Server";
+        Title = $"Daisy's Server v{AppInfo.VersionText}";
         Width = 1000;
         Height = 700;
         MinWidth = 640;
