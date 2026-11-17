@@ -1,20 +1,25 @@
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using DaisysServer.Modules;
+using DaisysServer.Protocol;
 
 namespace DaisysServer.Server;
 
 /// <summary>
-/// The running server: its settings, users, tokens and modules, and the listener (TCP, on every address, at the port
-/// in Settings) with its connections (<see cref="Session"/>).
+/// The running server: its settings, key, users and modules, and the listener (TCP, on every address, at the port in
+/// Settings) with its connections (<see cref="Session"/>).
 /// </summary>
 public sealed class ServerHost : IDisposable
 {
     public ServerSettings Settings { get; }
     public UserStore Users { get; }
-    public TokenStore Tokens { get; }
     public ModuleCatalog Catalog { get; } = new();
+    /// <summary>The server's key (every connection's handshake), and its fingerprint (what clients know it by).</summary>
+    public ECDiffieHellman Key { get; }
+    public string Fingerprint { get; }
+    public SignInLimit SignIns { get; } = new();
 
     private readonly object gate = new();
     private readonly List<Session> sessions = new();
@@ -32,12 +37,17 @@ public sealed class ServerHost : IDisposable
     public ServerHost()
     {
         Settings = ServerSettings.Load();
+        Key = ECDiffieHellman.Create();
+        Key.ImportPkcs8PrivateKey(Convert.FromBase64String(Settings.Key), out _);
+        Fingerprint = ServerKey.Fingerprint(Key.ExportSubjectPublicKeyInfo());
         Users = new UserStore(Convert.FromBase64String(Settings.Secret));
-        Tokens = new TokenStore();
-        Tokens.Revoked += id =>
+        // (tokens went in 0.3.0)
+        string tokens = Path.Combine(JsonFile.SettingsFolder, "tokens.json");
+        if (File.Exists(tokens))
         {
-            foreach (var s in Sessions().Where(s => s.TokenId == id)) s.Close("The token this connection used was revoked.");
-        };
+            try { File.Delete(tokens); ModuleLog.Server.Info("Tokens are gone since 0.3.0: tokens.json deleted"); }
+            catch (IOException ex) { ModuleLog.Server.Warn("tokens.json couldn't be deleted", ex); }
+        }
         Users.Removed += u =>
         {
             foreach (var s in Sessions().Where(s => s.User?.Id == u.Id)) s.Close("Your account was changed on the server: sign in again.");
@@ -49,7 +59,6 @@ public sealed class ServerHost : IDisposable
             try { Directory.Delete(Path.Combine(JsonFile.DataFolder, "users", u.Id), true); } catch (DirectoryNotFoundException) { }
             catch (Exception ex) { ModuleLog.Server.Warn($"{u.Name}'s data couldn't all be deleted", ex); }
         };
-        Users.Deleted += u => Tokens.RevokeFor(u.Id);
         Users.Changed += RaiseChanged;
     }
 

@@ -1,14 +1,19 @@
-// Tries a server end to end: connects with a token, signs in, opens the notepad channel, adds a note and edits it,
-// checks that a second client sees both, and that a wrong password and a wrong token are turned away; then the files
+// Tries a server end to end: connects to the server with its key, signs in, opens the notepad channel, adds a note and
+// edits it, checks that a second client sees both, and that a wrong password and the wrong server key are turned away;
+// then the users' ops; then the files
 // module (if it's there): roots, list, stat, read in pieces, a thumbnail, and paths off the shared drives refused; then the
 // processes module (if it's there): full on joining, reports merged and sent to both clients, catching up, the fleet; then
-// the sessions module (if it's there): a share in pieces, pushes, download, edit, refusals, a banned PC, delete.
-// Usage: TestClient <host> <port> <token> <user> <password>
-//        TestClient setup <home> <user> <password>   (a test server's users.json and tokens.json in <home>, the
-//        DAISYSSERVER_HOME it runs with, and files.json sharing the drive %TEMP% is on; prints the token)
+// the sessions module (if it's there): a share in pieces, pushes, download, edit, refusals, a banned PC, delete, and
+// anonymous clients; last, wrong passwords locking this address out of signing in (for 15 minutes: run it once).
+// Usage: TestClient <host> <port> <server key> <user> <password>
+//        TestClient setup <home> <user> <password>   (a test server's settings.json (port 38991, its key), users.json in
+//        <home>, the DAISYSSERVER_HOME it runs with, and files.json sharing the drive %TEMP% is on; prints the key)
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using DaisysServer.Protocol;
+
+// (this install's id: anonymous, what it shares is its own by it)
+const string Device = "testclient-device-0000001";
 
 if (args is ["setup", var home, var newUser, var newPassword])
 {
@@ -25,13 +30,11 @@ if (args is ["setup", var home, var newUser, var newPassword])
     };
     var users = new JsonObject { ["Users"] = new JsonArray(User(newUser, true), User(newUser + "-basic", false)) };
     File.WriteAllText(Path.Combine(home, "users.json"), users.ToJsonString());
-    string made = Token.Make(out var tid, out var secret);
-    var tokens = new JsonObject { ["Tokens"] = new JsonArray(new JsonObject
+    using var serverKey = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
+    File.WriteAllText(Path.Combine(home, "settings.json"), new JsonObject
     {
-        ["Id"] = tid, ["Name"] = "Test", ["Created"] = DateTime.UtcNow,
-        ["Secret"] = Convert.ToBase64String(ProtectedData.Protect(secret, null, DataProtectionScope.CurrentUser)),
-    }) };
-    File.WriteAllText(Path.Combine(home, "tokens.json"), tokens.ToJsonString());
+        ["Name"] = "Test", ["Port"] = 38991, ["CheckUpdatesOnLaunch"] = false, ["Key"] = Convert.ToBase64String(serverKey.ExportPkcs8PrivateKey()),
+    }.ToJsonString());
     File.WriteAllText(Path.Combine(home, "files.json"), new JsonObject { ["Drives"] = new JsonArray(Path.GetPathRoot(Path.GetTempPath())) }.ToJsonString());
     // sessions: the PC TestClient-Banned and a range nobody's in banned from sharing
     string sessionsDir = Path.Combine(home, "data", "sessions");
@@ -39,14 +42,14 @@ if (args is ["setup", var home, var newUser, var newPassword])
     File.WriteAllText(Path.Combine(sessionsDir, "bans.json"), new JsonObject { ["List"] = new JsonArray(
         new JsonObject { ["Kind"] = "PC", ["Value"] = "TestClient-Banned", ["Name"] = "TestClient-Banned", ["At"] = DateTime.UtcNow },
         new JsonObject { ["Kind"] = "Address", ["Value"] = "10.255.255.0/24", ["Name"] = "10.255.255.0/24", ["At"] = DateTime.UtcNow }) }.ToJsonString());
-    Console.WriteLine(made);
+    Console.WriteLine(ServerKey.Fingerprint(serverKey.ExportSubjectPublicKeyInfo()));
     return 0;
 }
 
 if (args is ["poke", var ph, var pp, var pt, var pu, var ppw, var find, var append, var rename])
 {
     // a third client: appends text to the note whose name has <find> in it, and renames it
-    var pc = await ServerClient.ConnectAsync(ph, int.Parse(pp), pt, pu, ppw, "TestClient-Poke", "TestClient", default);
+    var pc = await ServerClient.ConnectAsync(ph, int.Parse(pp), pt, pu, ppw, "TestClient-Poke", "TestClient", Device, default);
     var ch = await pc.OpenAsync("notepad", "notepad");
     ch.Post(new JsonObject { ["op"] = "join", ["cid"] = "poke" });
     using var wait = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -76,7 +79,7 @@ if (args is ["poke", var ph, var pp, var pt, var pu, var ppw, var find, var appe
 if (args is ["report", var rh, var rp, var rt, var ru, var rpw, var rname, var rtitle])
 {
     // a third PC on the processes module: reports a reviewed entry (as a person's classification) and prints the version
-    var rc = await ServerClient.ConnectAsync(rh, int.Parse(rp), rt, ru, rpw, "TestClient-Report", "TestClient", default);
+    var rc = await ServerClient.ConnectAsync(rh, int.Parse(rp), rt, ru, rpw, "TestClient-Report", "TestClient", Device, default);
     var ch = await rc.OpenAsync("processes", "ProcessAnalyzer");
     ch.Post(new JsonObject { ["op"] = "join", ["version"] = 0, ["app"] = "TestClient" });
     ch.Post(new JsonObject { ["op"] = "report", ["entries"] = new JsonArray(new JsonObject
@@ -100,7 +103,7 @@ if (args is ["report", var rh, var rp, var rt, var ru, var rpw, var rname, var r
 if (args is ["share", var sh, var sp, var stoken, var su, var spw, var spc, var strack, var stitle])
 {
     // a session shared from the PC <spc> on the sessions module (a small made-up file), for the server's page
-    var sc = await ServerClient.ConnectAsync(sh, int.Parse(sp), stoken, su, spw, spc, "TestClient", default);
+    var sc = await ServerClient.ConnectAsync(sh, int.Parse(sp), stoken, su, spw, spc, "TestClient", Device, default);
     var ch = await sc.OpenAsync("sessions", "Analysis");
     var data = System.Text.Encoding.UTF8.GetBytes("# ForzaWheel session,2\n" + stitle);
     int n = 0;
@@ -123,7 +126,7 @@ if (args is ["share", var sh, var sp, var stoken, var su, var spw, var spc, var 
     sc.Dispose();
     return 0;
 }
-if (args.Length < 5) { Console.WriteLine("TestClient <host> <port> <token> <user> <password>"); return 2; }
+if (args.Length < 5) { Console.WriteLine("TestClient <host> <port> <server key> <user> <password>"); return 2; }
 string host = args[0], token = args[2], user = args[3], password = args[4];
 int port = int.Parse(args[1]);
 int failures = 0;
@@ -136,7 +139,7 @@ async Task<JsonObject> Next(ServerChannel c, string op)
     throw new Exception($"channel ended before {op}: {c.Ended}");
 }
 
-var a = await ServerClient.ConnectAsync(host, port, token, user, password, "TestClient-A", "TestClient", default);
+var a = await ServerClient.ConnectAsync(host, port, token, user, password, "TestClient-A", "TestClient", Device, default);
 Check(a.DataKey.Length == 32, $"signed in as {a.User} on {a.Server} {a.ServerVersion}, modules: {string.Join(",", a.Modules)}");
 var ca = await a.OpenAsync("notepad", "notepad");
 ca.Post(new JsonObject { ["op"] = "join", ["cid"] = "test-a" });
@@ -155,7 +158,7 @@ ca.Post(new JsonObject { ["op"] = "edit", ["note"] = id, ["base"] = 0, ["seq"] =
 await Next(ca, "stale");
 Check(true, "an edit on an old version is stale");
 
-var b = await ServerClient.ConnectAsync(host, port, token, user, password, "TestClient-B", "TestClient", default);
+var b = await ServerClient.ConnectAsync(host, port, token, user, password, "TestClient-B", "TestClient", Device, default);
 Check(b.DataKey.SequenceEqual(a.DataKey), "a second client gets the same data key");
 var cb = await b.OpenAsync("notepad", "notepad");
 cb.Post(new JsonObject { ["op"] = "join", ["cid"] = "test-b" });
@@ -176,18 +179,25 @@ Check(true, "close reaches the other client");
 
 try { await a.OpenAsync("nosuchmodule", "x"); Check(false, "unknown module refused"); }
 catch (ServerException ex) { Check(true, "unknown module refused: " + ex.Message); }
-try { await ServerClient.ConnectAsync(host, port, token, user, password + "x", "TestClient-C", "TestClient", default); Check(false, "wrong password refused"); }
+try { await ServerClient.ConnectAsync(host, port, token, user, password + "x", "TestClient-C", "TestClient", Device, default); Check(false, "wrong password refused"); }
 catch (ServerException ex) { Check(true, "wrong password refused: " + ex.Message); }
+Check(a.ServerKey == token, "the server has the key it should");
 try
 {
-    var bad = Token.Make(out _, out _);
-    await ServerClient.ConnectAsync(host, port, bad, user, password, "TestClient-D", "TestClient", default);
-    Check(false, "unknown token refused");
+    await ServerClient.ConnectAsync(host, port, "AAAA" + token[4..], user, password, "TestClient-D", "TestClient", Device, default);
+    Check(false, "a server without the key expected refused");
 }
-catch (ServerException ex) { Check(true, "unknown token refused: " + ex.Message); }
+catch (ServerException ex) { Check(true, "a server without the key expected refused: " + ex.Message); }
+var any = await ServerClient.ConnectAsync(host, port, "", null, null, "TestClient-Any", "TestClient", Device, default);
+Check(any.ServerKey == token && any.Anonymous && any.DataKey.Length == 0, "no key expected: any taken, and kept (anonymous: no data key)");
+try { await any.OpenAsync("notepad", "notepad"); Check(false, "anonymous: notepad refused"); }
+catch (ServerException ex) { Check(true, "anonymous: notepad refused: " + ex.Message); }
+try { await any.AskAsync(new JsonObject { ["op"] = "users" }); Check(false, "anonymous: users refused"); }
+catch (ServerException ex) { Check(true, "anonymous: users refused: " + ex.Message); }
+any.Dispose();
 
 await b.ChangePasswordAsync(password, password + "-new");
-var c2 = await ServerClient.ConnectAsync(host, port, token, user, password + "-new", "TestClient-E", "TestClient", default);
+var c2 = await ServerClient.ConnectAsync(host, port, token, user, password + "-new", "TestClient-E", "TestClient", Device, default);
 Check(c2.DataKey.SequenceEqual(a.DataKey), "after a password change, the new one signs in and opens the same data key");
 await c2.ChangePasswordAsync(password + "-new", password);
 c2.Dispose();
@@ -211,32 +221,27 @@ catch (ServerException ex) { Check(true, "a wrong current password can't change 
     string? taken = await Problem(new JsonObject { ["op"] = "useredit", ["id"] = uid, ["name"] = user + "-basic" });
     Check(taken != null, "users: another user's name refused: " + taken);
     Check(await Problem(new JsonObject { ["op"] = "useredit", ["id"] = uid, ["name"] = user + "-renamed" }) == null, "users: renamed");
-    var renamed = await ServerClient.ConnectAsync(host, port, token, user + "-renamed", password, "TestClient-R", "TestClient", default);
+    var renamed = await ServerClient.ConnectAsync(host, port, token, user + "-renamed", password, "TestClient-R", "TestClient", Device, default);
     Check(renamed.DataKey.SequenceEqual(a.DataKey), "users: the renamed user signs in with their password and opens the same data key");
     renamed.Dispose();
     await a.AskAsync(new JsonObject { ["op"] = "useredit", ["id"] = uid, ["name"] = user, ["profile"] = new JsonObject { ["displayName"] = "", ["email"] = "" } });
     p = Me(await a.AskAsync(new JsonObject { ["op"] = "users" }))["profile"] as JsonObject;
     Check(ServerClient.Str(p!, "displayName") == "" && ServerClient.Str(p!, "email") == "", "users: renamed back, the fields cleared");
-    var basic = await ServerClient.ConnectAsync(host, port, token, user + "-basic", password, "TestClient-Basic", "TestClient", default);
+    var basic = await ServerClient.ConnectAsync(host, port, token, user + "-basic", password, "TestClient-Basic", "TestClient", Device, default);
     try { await basic.AskAsync(new JsonObject { ["op"] = "useredit", ["id"] = uid, ["profile"] = new JsonObject { ["displayName"] = "x" } }); Check(false, "users: a basic user can't useredit"); }
     catch (ServerException ex) { Check(true, "users: a basic user can't useredit: " + ex.Message); }
     basic.Dispose();
 
-    // tokens belong to users (0.2.2): useradd makes one, only they sign in with it, and it goes with them
-    string extra = "tok" + Guid.NewGuid().ToString("N")[..6];
+    // a user added by an admin signs in with their name and password
+    string extra = "new" + Guid.NewGuid().ToString("N")[..6];
     var made = await a.AskAsync(new JsonObject { ["op"] = "useradd", ["name"] = extra, ["password"] = password, ["admin"] = false });
-    string theirs = ServerClient.Str(made, "token");
-    Check(theirs.StartsWith("dsk1_"), "users: useradd answers with their token");
-    var own = await ServerClient.ConnectAsync(host, port, theirs, extra, password, "TestClient-Own", "TestClient", default);
-    Check(own.User == extra, "users: they sign in with it");
+    Check(ServerClient.Str(made, "op") == "useradd" && made["token"] == null, "users: useradd answered (no token)");
+    var own = await ServerClient.ConnectAsync(host, port, token, extra, password, "TestClient-Own", "TestClient", Device, default);
+    Check(own.User == extra, "users: they sign in");
     own.Dispose();
-    try { (await ServerClient.ConnectAsync(host, port, theirs, user, password, "TestClient-NotOwn", "TestClient", default)).Dispose(); Check(false, "users: another user can't sign in with their token"); }
-    catch (ServerException ex) { Check(true, "users: another user can't sign in with their token: " + ex.Message); }
     string extraId = ServerClient.Str((await a.AskAsync(new JsonObject { ["op"] = "users" }))["users"]!.AsArray().OfType<JsonObject>().First(x => ServerClient.Str(x, "name") == extra), "id");
-    string second = ServerClient.Str(await a.AskAsync(new JsonObject { ["op"] = "usertoken", ["id"] = extraId }), "token");
-    var own2 = await ServerClient.ConnectAsync(host, port, second, extra, password, "TestClient-Own2", "TestClient", default);
-    Check(second.StartsWith("dsk1_") && second != theirs, "users: usertoken makes them another, and it works");
-    own2.Dispose();
+    try { await a.AskAsync(new JsonObject { ["op"] = "usertoken", ["id"] = extraId }); Check(false, "users: usertoken gone"); }
+    catch (ServerException ex) { Check(true, "users: usertoken gone: " + ex.Message); }
 
     // groups (0.2.3): a new user is in User; Admin among them makes them an admin
     JsonObject Extra(JsonObject list) => list["users"]!.AsArray().OfType<JsonObject>().First(x => ServerClient.Str(x, "id") == extraId);
@@ -249,8 +254,8 @@ catch (ServerException ex) { Check(true, "a wrong current password can't change 
     var regrouped = Extra(await a.AskAsync(new JsonObject { ["op"] = "users" }));
     Check(GroupsOf(regrouped).SequenceEqual(["Admin", "SE-Analysis"]) && (bool?)regrouped["admin"] == true, "users: useredit sets the groups (unknown ignored), Admin makes an admin");
     await a.AskAsync(new JsonObject { ["op"] = "userdelete", ["id"] = extraId });
-    try { (await ServerClient.ConnectAsync(host, port, second, extra, password, "TestClient-Gone", "TestClient", default)).Dispose(); Check(false, "users: a deleted user's tokens are revoked"); }
-    catch (Exception ex) { Check(true, "users: a deleted user's tokens are revoked: " + ex.Message); }
+    try { (await ServerClient.ConnectAsync(host, port, token, extra, password, "TestClient-Gone", "TestClient", Device, default)).Dispose(); Check(false, "users: a deleted user can't sign in"); }
+    catch (Exception ex) { Check(true, "users: a deleted user can't sign in: " + ex.Message); }
 }
 
 if (a.Modules.Contains("files"))
@@ -496,7 +501,7 @@ if (a.Modules.Contains("sessions"))
     var bad = await Push(sb, "changed");
     Check((bad["session"] as JsonObject)!["video"] == null, "sessions: a video that isn't an https link is dropped");
 
-    var other = await ServerClient.ConnectAsync(host, port, token, user + "-basic", password, "TestClient-Other", "TestClient", default);
+    var other = await ServerClient.ConnectAsync(host, port, token, user + "-basic", password, "TestClient-Other", "TestClient", Device, default);
     var so = await other.OpenAsync("sessions", "Analysis");
     var theirs = (await Ask(so, new JsonObject { ["op"] = "list" }))["sessions"] as JsonArray;
     Check(theirs!.OfType<JsonObject>().Any(x => ServerClient.Str(x, "id") == sid && (bool?)x["mine"] == false), "sessions: another user sees it, not theirs");
@@ -517,15 +522,41 @@ if (a.Modules.Contains("sessions"))
     var unknown = await Ask(sa, new JsonObject { ["op"] = "frobnicate" });
     Check(ServerClient.Str(unknown, "message").Contains("update it"), "sessions: an unknown op: " + unknown["message"]);
 
-    var banned = await ServerClient.ConnectAsync(host, port, token, user, password, "TestClient-Banned", "TestClient", default);
+    var banned = await ServerClient.ConnectAsync(host, port, token, user, password, "TestClient-Banned", "TestClient", Device, default);
     var sx = await banned.OpenAsync("sessions", "Analysis");
     var no = await Ask(sx, new JsonObject { ["op"] = "share", ["meta"] = Meta("Banned"), ["size"] = 10, ["sha256"] = Hash(new byte[10]) });
     Check(ServerClient.Str(no, "op") == "error", "sessions: a banned PC can't share: " + no["message"]);
     Check((await Ask(sx, new JsonObject { ["op"] = "list" }))["sessions"] is JsonArray, "sessions: but can still list");
     banned.Dispose();
 
+    // anonymous (0.3.0): share, theirs by their install (mine), shown by their PC; another install can't touch it
+    var anon = await ServerClient.ConnectAsync(host, port, token, null, null, "TestClient-Anon", "TestClient", "testclient-anon-device-1", default);
+    var sn = await anon.OpenAsync("sessions", "Analysis");
+    var small = new byte[1000];
+    new Random(5).NextBytes(small);
+    string aid = ServerClient.Str(await Ask(sn, new JsonObject { ["op"] = "share", ["meta"] = Meta("Anonymous share"), ["size"] = small.Length, ["sha256"] = Hash(small) }), "id");
+    var aput = await Ask(sn, new JsonObject { ["op"] = "put", ["id"] = aid, ["offset"] = 0, ["data"] = Convert.ToBase64String(small), ["eof"] = true });
+    var anonAdded = (await Push(sb, "added"))["session"] as JsonObject;
+    Check(ServerClient.Str(aput, "op") == "put" && ServerClient.Str(anonAdded!, "id") == aid && ServerClient.Str(anonAdded!, "user") == ""
+        && ServerClient.Str(anonAdded!, "displayName") == "TestClient-Anon" && (bool?)anonAdded!["anonymous"] == true && (bool?)anonAdded["mine"] == false,
+        "sessions: anonymous share, pushed with no user, the PC as displayName, anonymous " + aput["message"]);
+    anon.Dispose();
+    var anon2 = await ServerClient.ConnectAsync(host, port, token, null, null, "TestClient-Anon", "TestClient", "testclient-anon-device-1", default);
+    var sn2 = await anon2.OpenAsync("sessions", "Analysis");
+    var again = ((await Ask(sn2, new JsonObject { ["op"] = "list" }))["sessions"] as JsonArray)!.OfType<JsonObject>().First(x => ServerClient.Str(x, "id") == aid);
+    Check((bool?)again["mine"] == true && ServerClient.Str(await Ask(sn2, new JsonObject { ["op"] = "edit", ["id"] = aid, ["title"] = "Anon edited" }), "op") == "edit",
+        "sessions: the same install, connecting again, has it as mine and edits it");
+    var thief = await ServerClient.ConnectAsync(host, port, token, null, null, "TestClient-Anon", "TestClient", "testclient-anon-device-2", default);
+    var st2 = await thief.OpenAsync("sessions", "Analysis");
+    var stolen = await Ask(st2, new JsonObject { ["op"] = "delete", ["id"] = aid });
+    Check(ServerClient.Str(stolen, "op") == "error", "sessions: another install with the same PC name can't delete it: " + stolen["message"]);
+    thief.Dispose();
+    Check(ServerClient.Str(await Ask(sn2, new JsonObject { ["op"] = "delete", ["id"] = aid }), "op") == "delete", "sessions: its install deletes it");
+    anon2.Dispose();
+
     var del = await Ask(sa, new JsonObject { ["op"] = "delete", ["id"] = sid });
     var removedB = await Push(sb, "removed");
+    while (ServerClient.Str(removedB, "id") != sid) removedB = await Push(sb, "removed");
     Check(ServerClient.Str(del, "op") == "delete" && ServerClient.Str(removedB, "id") == sid, "sessions: delete answered and removed pushed");
     var gone = await Ask(sb, new JsonObject { ["op"] = "get", ["id"] = sid, ["offset"] = 0, ["length"] = 100 });
     Check(ServerClient.Str(gone, "op") == "error", "sessions: a deleted one can't be downloaded: " + gone["message"]);
@@ -535,5 +566,15 @@ if (a.Modules.Contains("sessions"))
 
 a.Dispose();
 b.Dispose();
+
+// last: 5 wrong passwords from this address, and it can't sign in for 15 minutes, even with the right one
+for (int w = 0; w < 5; w++)
+    try { (await ServerClient.ConnectAsync(host, port, token, user, "wrong" + w, $"TestClient-W{w}", "TestClient", Device, default)).Dispose(); } catch (ServerException) { }
+try { (await ServerClient.ConnectAsync(host, port, token, user, password, "TestClient-Locked", "TestClient", Device, default)).Dispose(); Check(false, "5 wrong passwords lock the address out"); }
+catch (ServerException ex) { Check(ex.Message.Contains("Too many"), "5 wrong passwords lock the address out: " + ex.Message); }
+var stillAnon = await ServerClient.ConnectAsync(host, port, token, null, null, "TestClient-Anon", "TestClient", Device, default);
+Check(stillAnon.Anonymous, "but it can still connect anonymously");
+stillAnon.Dispose();
+
 Console.WriteLine(failures == 0 ? "ALL PASSED" : $"{failures} FAILED");
 return failures == 0 ? 0 : 1;

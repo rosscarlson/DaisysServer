@@ -43,7 +43,7 @@ internal sealed class Tray : IDisposable
 
     private void Refresh()
     {
-        int n = server.Sessions().Count(s => s.User != null);
+        int n = server.Sessions().Count(s => s.Client.Length > 0);
         string text = server.Listening ? $"Daisy's Server: port {server.ListeningPort}, {n} connected" : "Daisy's Server: not listening";
         icon.Text = text.Length > 63 ? text[..63] : text;
         listen.Text = server.Listening ? "Stop listening" : "Start listening";

@@ -9,7 +9,7 @@ namespace DaisysServer.Modules.Sessions;
 
 /// <summary>
 /// Every session shared: the index (each one's meta, kept as the JSON object it came as, so newer clients' fields
-/// survive, plus who shared it: user id, address, token), one file a session (the client's gzip, kept as it came), the
+/// survive, plus who shared it: user id (an anonymous one's "anon:…"), address), one file a session (the client's gzip, kept as it came), the
 /// uploads under way, the bans, and the open channels the news goes to. One for the whole server, not sealed:
 /// data\sessions\sessions.json, bans.json, &lt;id&gt;.gz, and uploads\&lt;id&gt;.part. Callable from any thread; pushes are
 /// posted under the lock, so every channel gets them in order.
@@ -20,7 +20,9 @@ internal sealed class SessionStore
     public const int MaxPiece = 1 << 20;
     private static readonly TimeSpan UploadTimeout = TimeSpan.FromMinutes(10);
     /// <summary>What the server sets: never taken from a client's meta.</summary>
-    private static readonly string[] ServerFields = ["id", "user", "client", "shared", "size", "mine", "userId", "address", "tokenId", "token"];
+    private static readonly string[] ServerFields = ["id", "user", "client", "shared", "size", "mine", "displayName", "anonymous", "userId", "address", "tokenId", "token"];
+    /// <summary>Kept, never sent (tokenId and token: before 0.3.0, dropped when the index is read).</summary>
+    private static readonly string[] Private = ["userId", "address", "tokenId", "token"];
 
     /// <summary>A client's sessions channel.</summary>
     public sealed class Peer(IModuleChannel channel)
@@ -43,10 +45,11 @@ internal sealed class SessionStore
         public IncrementalHash Hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
     }
 
+    /// <summary>(Token: before 0.3.0, dropped when the bans are read.)</summary>
     public enum BanKind { User, PC, Address, Token }
 
-    /// <summary>One ban: what (a user's id, a PC's name, an IP address or range like 203.0.113.0/24, a token's id),
-    /// shown as <see cref="Name"/>.</summary>
+    /// <summary>One ban: what (a user's id, an anonymous one's too; a PC's name; an IP address or range like
+    /// 203.0.113.0/24), shown as <see cref="Name"/>.</summary>
     public sealed class Ban
     {
         public BanKind Kind { get; set; }
@@ -61,7 +64,7 @@ internal sealed class SessionStore
 
     /// <summary>A session as the page shows it.</summary>
     public sealed record Row(string Id, DateTime Shared, string Title, string Description, string Driver, string Game, string Track, string Car,
-        string Class, int Laps, double Best, string User, string UserId, string Client, string Address, string TokenId, string Token, long Size, string Video);
+        string Class, int Laps, double Best, string User, string UserId, string Client, string Address, long Size, string Video);
 
     private readonly object gate = new();
     private readonly string folder, indexFile, bansFile, uploads;
@@ -87,8 +90,14 @@ internal sealed class SessionStore
         bansFile = Path.Combine(folder, "bans.json");
         uploads = Path.Combine(folder, "uploads");
         foreach (var s in JsonFile.Load<Index>(indexFile).Sessions)
-            if (Str(s, "id") is { Length: > 0 } id && File.Exists(FileOf(id))) sessions[id] = s;
+            if (Str(s, "id") is { Length: > 0 } id && File.Exists(FileOf(id)))
+            {
+                s.Remove("tokenId");
+                s.Remove("token");
+                sessions[id] = s;
+            }
         bans = JsonFile.Load<Bans>(bansFile).List;
+        if (bans.RemoveAll(b => b.Kind == BanKind.Token) > 0) SaveBans();
         // (uploads left by a stop are never finished)
         try { if (Directory.Exists(uploads)) Directory.Delete(uploads, true); } catch { }
         saver = new Timer(_ => Flush());
@@ -144,15 +153,16 @@ internal sealed class SessionStore
     }
 
     /// <summary>The meta a channel's user is sent: the client's fields, the server's, mine (theirs or not) and (since
-    /// 0.2.4) displayName, the sharer's now (looked up by their id: only their user name is kept); not where it came
-    /// from.</summary>
+    /// 0.2.4) displayName, the sharer's now (looked up by their id: only their user name is kept; since 0.3.0, an
+    /// anonymous one's PC); not where it came from.</summary>
     private static JsonObject MetaFor(JsonObject s, IModuleChannel to, IReadOnlyDictionary<string, string> names)
     {
         var m = new JsonObject();
         foreach (var (k, v) in s)
-            if (k is not ("userId" or "address" or "tokenId" or "token")) m[k] = v?.DeepClone();
+            if (!Private.Contains(k)) m[k] = v?.DeepClone();
         m["mine"] = Str(s, "userId") == to.User.Id;
         if (names.TryGetValue(Str(s, "userId"), out var name)) m["displayName"] = name;
+        else if (s["anonymous"] is JsonValue a && a.TryGetValue<bool>(out var anon) && anon) m["displayName"] = Str(s, "client");
         return m;
     }
 
@@ -238,10 +248,9 @@ internal sealed class SessionStore
         s["client"] = c.Client;
         s["shared"] = Ms(DateTime.UtcNow);
         s["size"] = u.Size;
+        if (c.User.Anonymous) s["anonymous"] = true;
         s["userId"] = c.User.Id;
         s["address"] = c.Address;
-        s["tokenId"] = c.TokenId;
-        s["token"] = c.TokenName;
         lock (gate)
         {
             p.Uploads.Remove(u);
@@ -251,7 +260,7 @@ internal sealed class SessionStore
             Push("added", s);
             Save();
         }
-        log.Info($"{c.User.Name} on {c.Client} ({c.Address}) shared {u.Id}, {Ui.Size(u.Size)}: {Str(s, "track")}, \"{Str(s, "title")}\"");
+        log.Info($"{c.User.Describe(c.Client)} ({c.Address}) shared {u.Id}, {Ui.Size(u.Size)}: {Str(s, "track")}, \"{Str(s, "title")}\"");
         return (u.Received, null);
     }
 
@@ -264,7 +273,7 @@ internal sealed class SessionStore
         {
             using var f = new FileStream(FileOf(id), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             if (offset < 0 || offset > f.Length) return (0, [], "That's past the end of the session.");
-            if (offset == 0) log.Info($"{c.User.Name} on {c.Client} ({c.Address}) downloads {id}, {Ui.Size(f.Length)}");
+            if (offset == 0) log.Info($"{c.User.Describe(c.Client)} ({c.Address}) downloads {id}, {Ui.Size(f.Length)}");
             f.Position = offset;
             var buffer = new byte[(int)Math.Min(Math.Clamp(length, 0, MaxPiece), f.Length - offset)];
             f.ReadExactly(buffer);
@@ -289,7 +298,7 @@ internal sealed class SessionStore
             Push("changed", s);
             Save();
         }
-        log.Info($"{c.User.Name} on {c.Client} ({c.Address}) changed {id}: \"{Str(s, "title")}\"");
+        log.Info($"{c.User.Describe(c.Client)} ({c.Address}) changed {id}: \"{Str(s, "title")}\"");
         return (MetaFor(s, c, Names()), null);
     }
 
@@ -301,7 +310,7 @@ internal sealed class SessionStore
             if (!sessions.TryGetValue(id, out var s)) return null;
             if (Str(s, "userId") != c.User.Id && !c.User.Admin) return "Only the person who shared it can change it.";
         }
-        Remove([id], $"{c.User.Name} on {c.Client} ({c.Address})");
+        Remove([id], $"{c.User.Describe(c.Client)} ({c.Address})");
         return null;
     }
 
@@ -328,7 +337,7 @@ internal sealed class SessionStore
         lock (gate)
             foreach (var u in peers.SelectMany(p => p.Uploads).Where(u => DateTime.UtcNow - u.Began > UploadTimeout).ToList())
             {
-                log.Info($"{u.Peer.Channel.User.Name} on {u.Peer.Channel.Client}: a share that didn't finish in 10 minutes, dropped");
+                log.Info($"{u.Peer.Channel.User.Describe(u.Peer.Channel.Client)}: a share that didn't finish in 10 minutes, dropped");
                 Drop(u);
             }
     }
@@ -343,8 +352,8 @@ internal sealed class SessionStore
         lock (gate)
             return sessions.Values.Select(s => new Row(Str(s, "id"), DateTime.UnixEpoch.AddMilliseconds(Long(s, "shared")).ToLocalTime(),
                 Str(s, "title"), Str(s, "description"), Str(s, "driver"), Str(s, "game"), Str(s, "track"), Str(s, "car"), Str(s, "class"),
-                (int)Long(s, "laps"), Double(s, "best"), Str(s, "user"), Str(s, "userId"),
-                Str(s, "client"), Str(s, "address"), Str(s, "tokenId"), Str(s, "token"), Long(s, "size"), Str(s, "video")))
+                (int)Long(s, "laps"), Double(s, "best"), Str(s, "user") is { Length: > 0 } user ? user : "(anonymous)", Str(s, "userId"),
+                Str(s, "client"), Str(s, "address"), Long(s, "size"), Str(s, "video")))
                 .OrderByDescending(r => r.Shared).ToList();
     }
 
@@ -381,7 +390,7 @@ internal sealed class SessionStore
         SaveBans();
         log.Info($"Banned from sharing: {kind} {ban.Name}{(note.Length > 0 ? $" ({note})" : "")}");
         List<string> theirs;
-        lock (gate) theirs = sessions.Values.Where(s => Matches(ban, Str(s, "userId"), Str(s, "client"), Str(s, "address"), Str(s, "tokenId"))).Select(s => Str(s, "id")).ToList();
+        lock (gate) theirs = sessions.Values.Where(s => Matches(ban, Str(s, "userId"), Str(s, "client"), Str(s, "address"))).Select(s => Str(s, "id")).ToList();
         return Remove(theirs, "The ban on " + ban.Name);
     }
 
@@ -394,17 +403,17 @@ internal sealed class SessionStore
 
     private Ban? BanOf(IModuleChannel c)
     {
-        lock (gate) return bans.FirstOrDefault(b => Matches(b, c.User.Id, c.Client, c.Address, c.TokenId));
+        lock (gate) return bans.FirstOrDefault(b => Matches(b, c.User.Id, c.Client, c.Address));
     }
 
     private static string Refused(Ban ban) => "You can't share sessions on this server.";
 
-    public static bool Matches(Ban b, string userId, string client, string address, string tokenId) => b.Kind switch
+    public static bool Matches(Ban b, string userId, string client, string address) => b.Kind switch
     {
         BanKind.User => b.Value == userId,
         BanKind.PC => string.Equals(b.Value, client, StringComparison.OrdinalIgnoreCase),
-        BanKind.Token => b.Value == tokenId,
-        _ => InRange(b.Value, address),
+        BanKind.Address => InRange(b.Value, address),
+        _ => false,
     };
 
     /// <summary>An address, or a range written as a.b.c.d/n (IPv6 too).</summary>

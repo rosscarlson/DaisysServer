@@ -11,7 +11,7 @@ using DaisysServer.Updates;
 namespace DaisysServer;
 
 /// <summary>
-/// The window: the notification bar (updates, messages), the tabs (Status, Users (with their tokens), a tab per module with a
+/// The window: the notification bar (updates, messages), the tabs (Status, Users, a tab per module with a
 /// page, Log and Settings, always last) and the page showing. Closing it keeps the server running in the tray.
 /// </summary>
 public sealed class MainWindow : Window

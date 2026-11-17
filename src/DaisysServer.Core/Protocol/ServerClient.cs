@@ -10,13 +10,15 @@ namespace DaisysServer.Protocol;
 // This file is shared, word for word, by Daisy's Server (src/DaisysServer.Core/Protocol) and Daisy's App
 // (src/DaisysApp.Core/Server): a change here goes there too. PROTOCOL.md describes it.
 
-/// <summary>A problem worded for the user (the wrong password, the token not accepted, a module switched off…).</summary>
+/// <summary>A problem worded for the user (the wrong password, the server's key not the one it was, a module switched
+/// off…).</summary>
 public sealed class ServerException(string message) : Exception(message);
 
 /// <summary>
-/// A client's connection to Daisy's Server: connected with a token, signed in as a user (the user's data key unwrapped
-/// here, from the password), then any number of module channels on it at once, each a conversation with one of the
-/// server's modules. Questions (<see cref="AskAsync"/>) carry an id ("rid") that the answer repeats.
+/// A client's connection to Daisy's Server: to the server with the key it expects (<see cref="ServerKey"/>), signed in
+/// as a user (the user's data key unwrapped here, from the password) or anonymous (only the modules that allow it, like
+/// sessions), then any number of module channels on it at once, each a conversation with one of the server's modules.
+/// Questions (<see cref="AskAsync"/>) carry an id ("rid") that the answer repeats.
 /// </summary>
 public sealed class ServerClient : IDisposable
 {
@@ -31,10 +33,13 @@ public sealed class ServerClient : IDisposable
     public string Server { get; private set; } = "";
     public string ServerVersion { get; private set; } = "";
     public IReadOnlyList<string> Modules { get; private set; } = Array.Empty<string>();
-    /// <summary>Signed in as (the name as the server has it), and whether that's an admin.</summary>
+    /// <summary>The server's key's fingerprint: keep it, and pass it the next time (<see cref="ConnectAsync"/>).</summary>
+    public string ServerKey => wire.ServerKey;
+    /// <summary>Signed in as (the name as the server has it; empty: anonymous), and whether that's an admin.</summary>
     public string User { get; private set; } = "";
+    public bool Anonymous => User.Length == 0;
     public bool Admin { get; private set; }
-    /// <summary>The user's data key: what modules seal their data with (<see cref="Vault.Seal"/>).</summary>
+    /// <summary>The user's data key: what modules seal their data with (<see cref="Vault.Seal"/>); empty, anonymous.</summary>
     public byte[] DataKey { get; private set; } = Array.Empty<byte>();
 
     /// <summary>The connection went (the reason, worded for the user); raised once, on a background thread.</summary>
@@ -43,10 +48,15 @@ public sealed class ServerClient : IDisposable
 
     private ServerClient(Wire wire) => this.wire = wire;
 
-    /// <summary>Connects, proves the token, signs in (making the user's data key the first time) and starts listening.</summary>
-    public static async Task<ServerClient> ConnectAsync(string host, int port, string token, string user, string password, string clientName, string app, CancellationToken ct)
+    /// <summary>
+    /// Connects, signs in (unless <paramref name="user"/> is empty: anonymous) and starts listening. The server must have
+    /// the key whose fingerprint is <paramref name="serverKey"/>: built into the client, or kept from the first connection
+    /// (<see cref="ServerKey"/>); empty takes any (the first time). <paramref name="device"/>: a random id this install
+    /// makes once and keeps, never shown: anonymous, what it shares is its own by that.
+    /// </summary>
+    public static async Task<ServerClient> ConnectAsync(string host, int port, string? serverKey, string? user, string? password,
+        string clientName, string app, string device, CancellationToken ct)
     {
-        Token.Parse(token);
         var tcp = new TcpClient { NoDelay = true };
         using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
@@ -64,38 +74,27 @@ public sealed class ServerClient : IDisposable
             }
         }
         Wire w;
-        try { w = await Wire.ConnectAsync(tcp.GetStream(), token, ct); }
+        try { w = await Wire.ConnectAsync(tcp.GetStream(), serverKey, ct); }
+        catch (WireAuthException)
+        {
+            tcp.Dispose();
+            throw new ServerException($"{host}:{port} doesn't have the key of the server you know there: it may not be yours. " +
+                "If the server was reinstalled, forget its key and connect again.");
+        }
         catch (Exception ex) when (ex is IOException or FormatException or CryptographicException or InvalidOperationException or NullReferenceException or System.Text.Json.JsonException)
         {
             tcp.Dispose();
-            throw new ServerException(ex is FormatException ? ex.Message : $"{host}:{port} isn't a Daisy's Server ({ex.Message.TrimEnd('.')})");
+            throw new ServerException(ex.Message.Contains("update it") ? ex.Message : $"{host}:{port} isn't a Daisy's Server ({ex.Message.TrimEnd('.')})");
         }
         var c = new ServerClient(w);
         try
         {
-            await w.SendAsync(new JsonObject { ["op"] = "hello", ["client"] = clientName, ["app"] = app, ["v"] = Wire.Version }, ct);
-            var welcome = await c.ReplyAsync(ct, "The server didn't accept the token (or it's been revoked).");
+            await w.SendAsync(new JsonObject { ["op"] = "hello", ["client"] = clientName, ["app"] = app, ["v"] = Wire.Version, ["device"] = device }, ct);
+            var welcome = await c.ReplyAsync(ct);
             c.Server = Str(welcome, "server");
             c.ServerVersion = Str(welcome, "version");
             c.Modules = (welcome["modules"] as JsonArray)?.Select(m => (string?)m?["id"] ?? "").Where(m => m.Length > 0).ToList() ?? new List<string>();
-
-            await w.SendAsync(new JsonObject { ["op"] = "prelogin", ["user"] = user }, ct);
-            var pre = await c.ReplyAsync(ct);
-            var master = Vault.Master(password, Convert.FromBase64String(Str(pre, "salt")), (int?)pre["iter"] ?? Vault.Iterations);
-            await w.SendAsync(new JsonObject { ["op"] = "login", ["user"] = user, ["auth"] = Convert.ToBase64String(Vault.Auth(master)) }, ct);
-            var login = await c.ReplyAsync(ct);
-            c.User = Str(login, "user");
-            c.Admin = (bool?)login["admin"] == true;
-            var wrap = Vault.WrapKey(master);
-            string vault = Str(login, "vault");
-            if (vault.Length == 0)
-            {
-                // the first sign-in: this client makes the data key (the server keeps the first one it gets)
-                await w.SendAsync(new JsonObject { ["op"] = "vault", ["vault"] = Vault.Seal(wrap, RandomNumberGenerator.GetBytes(32)) }, ct);
-                vault = Str(await c.ReplyAsync(ct), "vault");
-            }
-            try { c.DataKey = Vault.Open(wrap, vault); }
-            catch (Exception ex) when (ex is CryptographicException or FormatException) { throw new ServerException("Your data key couldn't be opened with this password."); }
+            if (!string.IsNullOrEmpty(user)) await c.SignInAsync(user, password ?? "", ct);
         }
         catch
         {
@@ -107,14 +106,36 @@ public sealed class ServerClient : IDisposable
         return c;
     }
 
-    /// <summary>The next message during sign-in; an error from the server is thrown as it worded it.</summary>
-    private async Task<JsonObject> ReplyAsync(CancellationToken ct, string? whenClosed = null)
+    /// <summary>Signs in, making the user's data key the first time (during <see cref="ConnectAsync"/>).</summary>
+    private async Task SignInAsync(string user, string password, CancellationToken ct)
+    {
+        await wire.SendAsync(new JsonObject { ["op"] = "prelogin", ["user"] = user }, ct);
+        var pre = await ReplyAsync(ct);
+        var master = Vault.Master(password, Convert.FromBase64String(Str(pre, "salt")), (int?)pre["iter"] ?? Vault.Iterations);
+        await wire.SendAsync(new JsonObject { ["op"] = "login", ["user"] = user, ["auth"] = Convert.ToBase64String(Vault.Auth(master)) }, ct);
+        var login = await ReplyAsync(ct);
+        var wrap = Vault.WrapKey(master);
+        string vault = Str(login, "vault");
+        if (vault.Length == 0)
+        {
+            // the first sign-in: this client makes the data key (the server keeps the first one it gets)
+            await wire.SendAsync(new JsonObject { ["op"] = "vault", ["vault"] = Vault.Seal(wrap, RandomNumberGenerator.GetBytes(32)) }, ct);
+            vault = Str(await ReplyAsync(ct), "vault");
+        }
+        try { DataKey = Vault.Open(wrap, vault); }
+        catch (Exception ex) when (ex is CryptographicException or FormatException) { throw new ServerException("Your data key couldn't be opened with this password."); }
+        User = Str(login, "user");
+        Admin = (bool?)login["admin"] == true;
+    }
+
+    /// <summary>The next message while connecting; an error (or a bye) from the server is thrown as it worded it.</summary>
+    private async Task<JsonObject> ReplyAsync(CancellationToken ct)
     {
         JsonObject? m;
         try { m = await wire.ReadAsync(ct); }
         catch (Exception ex) when (ex is IOException or CryptographicException) { m = null; }
-        if (m == null) throw new ServerException(whenClosed ?? "The server closed the connection.");
-        if (Str(m, "op") == "error") throw new ServerException(Str(m, "message"));
+        if (m == null) throw new ServerException("The server closed the connection.");
+        if (Str(m, "op") is "error" or "bye") throw new ServerException(Str(m, "message") is { Length: > 0 } why ? why : "The server closed the connection.");
         return m;
     }
 

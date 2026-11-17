@@ -11,9 +11,10 @@ using DaisysServer.Protocol;
 namespace DaisysServer.Server;
 
 /// <summary>
-/// One client's connection: the handshake (its token), its hello, its sign-in, then its questions and its channels to
-/// modules, each served by the module until either end closes it. Everything it sends goes out in order through one
-/// queue. A connection that says nothing for two minutes is dropped (clients ping every 30 seconds).
+/// One client's connection: the handshake (the server's key), its hello, its sign-in (or none: anonymous, for the
+/// modules that allow it), then its questions and its channels to modules, each served by the module until either end
+/// closes it. Everything it sends goes out in order through one queue. A connection that says nothing for two minutes is
+/// dropped (clients ping every 30 seconds).
 /// </summary>
 public sealed class Session
 {
@@ -29,10 +30,12 @@ public sealed class Session
     private DateTime lastHeard = DateTime.UtcNow;
 
     public string Address { get; }
-    public string TokenId { get; private set; } = "";
     public string Client { get; private set; } = "";
     public string App { get; private set; } = "";
+    /// <summary>Who signed in; null: nobody (yet), so channels it opens are <see cref="Guest"/>'s.</summary>
     public ServerUser? User { get; private set; }
+    /// <summary>Its anonymous user: "anon:" and a hash of the device id from its hello (one made up if it sent none).</summary>
+    public ServerUser Guest { get; private set; } = new(ServerUser.AnonymousPrefix, "", false);
     public DateTime Since { get; } = DateTime.Now;
     /// <summary>The modules it has channels open to.</summary>
     public IReadOnlyList<string> Open => channels.Values.Select(c => c.Module).Distinct().ToList();
@@ -57,21 +60,15 @@ public sealed class Session
                 handshake.CancelAfter(TimeSpan.FromSeconds(15));
                 try
                 {
-                    var (w, id) = await Wire.AcceptAsync(tcp.GetStream(), id => server.Tokens.SecretOf(id), handshake.Token);
+                    var w = await Wire.AcceptAsync(tcp.GetStream(), server.Key, handshake.Token);
                     wire = w;
-                    TokenId = id;
-                    // (the wrong secret for that id: the hello doesn't decrypt)
                     var hello = await w.ReadAsync(handshake.Token);
                     if (hello == null || Str(hello, "op") != "hello") return;
                     Client = Clean(Str(hello, "client"), 60) is { Length: > 0 } c ? c : Address;
                     App = Clean(Str(hello, "app"), 40);
-                }
-                catch (Exception ex) when (ex is WireAuthException or CryptographicException)
-                {
-                    Log.Warn($"{Address}: a connection with a token that isn't valid ({ex.Message})");
-                    // (slowly, so guessing is slow)
-                    await Task.Delay(1500, CancellationToken.None);
-                    return;
+                    string device = Str(hello, "device") is { Length: >= 16 } d ? d : Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
+                    string anon = ServerUser.AnonymousPrefix + Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(device)))[..16].ToLowerInvariant();
+                    Guest = new ServerUser(anon, "", false, Client);
                 }
                 catch (Exception ex)
                 {
@@ -85,9 +82,9 @@ public sealed class Session
             {
                 ["op"] = "welcome", ["server"] = server.Settings.Name, ["version"] = AppInfo.VersionText, ["v"] = Wire.Version,
                 ["modules"] = new JsonArray(server.Catalog.Modules.Where(m => m.Instance != null)
-                    .Select(m => (JsonNode)new JsonObject { ["id"] = m.Id, ["name"] = m.Name, ["version"] = m.Version }).ToArray()),
+                    .Select(m => (JsonNode)new JsonObject { ["id"] = m.Id, ["name"] = m.Name, ["version"] = m.Version, ["anonymous"] = m.Instance!.Anonymous }).ToArray()),
             });
-            Log.Info($"{Client} ({Address}) connected with token {TokenId}");
+            Log.Info($"{Client} ({Address}) connected");
             server.RaiseChanged();
             while (await wire.ReadAsync(ct) is { } m)
             {
@@ -185,29 +182,34 @@ public sealed class Session
                 }
             case "login":
                 {
-                    var u = server.Users.SignIn(Str(m, "user"), Str(m, "auth"));
-                    // a token for one user signs in only them
-                    if (u != null && server.Tokens.UserOf(TokenId) is { Length: > 0 } owner && owner != u.Id)
+                    // (wrong passwords counted by address: anyone can get this far)
+                    if (server.SignIns.Blocked(Address) is { } wait)
                     {
-                        Log.Warn($"{Client} ({Address}): {u.Name} tried to sign in with another user's token ({TokenId})");
-                        Error(m, "This token is for another user: ask for your own.");
-                        if (++failures >= 5) Close("Too many tries.");
+                        Error(m, $"Too many wrong passwords from your address: try again in {Math.Max(1, (int)Math.Ceiling(wait.TotalMinutes))} minutes.");
                         return;
                     }
+                    var u = server.Users.SignIn(Str(m, "user"), Str(m, "auth"));
                     if (u == null)
                     {
                         Log.Warn($"{Client} ({Address}): wrong user name or password for \"{Clean(Str(m, "user"), 40)}\"");
+                        server.SignIns.Failed(Address);
                         await Task.Delay(1000);
                         Error(m, "Wrong user name or password.");
                         if (++failures >= 5) Close("Too many tries.");
                         return;
                     }
+                    server.SignIns.Succeeded(Address);
                     User = u.ToServerUser();
                     Log.Info($"{Client} ({Address}) signed in as {u.Name}");
                     Reply(m, new JsonObject { ["op"] = "login", ["user"] = u.Name, ["admin"] = u.Admin, ["vault"] = u.Vault });
                     server.RaiseChanged();
                     return;
                 }
+            // (signed in or not: a module that doesn't allow anonymous ones says so)
+            case "open": OpenChannel(m, User ?? Guest); return;
+            case "close":
+                if ((int?)m["ch"] is int closing && channels.TryRemove(closing, out var gone)) gone.End();
+                return;
         }
         if (User is not { } user)
         {
@@ -223,10 +225,6 @@ public sealed class Session
                 if (server.Users.ChangePassword(user.Id, Str(m, "auth"), Str(m, "salt"), (int?)m["iter"] ?? Vault.Iterations, Str(m, "newAuth"), Str(m, "vault")))
                     Reply(m, new JsonObject { ["op"] = "password" });
                 else Error(m, "The password you have now isn't right.");
-                return;
-            case "open": OpenChannel(m, user); return;
-            case "close":
-                if ((int?)m["ch"] is int closing && channels.TryRemove(closing, out var gone)) gone.End();
                 return;
         }
         // admins: the users
@@ -251,15 +249,8 @@ public sealed class Session
                 Reply(m, new JsonObject { ["op"] = "users", ["users"] = list, ["fields"] = fields, ["groups"] = new JsonArray(UserStore.Groups.Select(g => (JsonNode)g).ToArray()) });
                 return;
             case "useradd":
-                if (server.Users.Add(Str(m, "name"), Str(m, "password"), (bool?)m["admin"] == true, Profile(m), Groups(m)) is { } notAdded) { Error(m, notAdded); return; }
-                // their token, made with them (since 0.2.2)
-                var added = server.Users.All().First(x => x.Name.Equals(Str(m, "name").Trim(), StringComparison.OrdinalIgnoreCase));
-                Reply(m, new JsonObject { ["op"] = op, ["token"] = server.Tokens.Create(added.Name, added.Id) });
-                return;
-            case "usertoken":
-                if (server.Users.All().FirstOrDefault(x => x.Id == Str(m, "id")) is not { } holder) { Error(m, "No such user."); return; }
-                Reply(m, new JsonObject { ["op"] = op, ["token"] = server.Tokens.Create(holder.Name, holder.Id) });
-                return;
+                problem = server.Users.Add(Str(m, "name"), Str(m, "password"), (bool?)m["admin"] == true, Profile(m), Groups(m));
+                break;
             case "useredit":
                 problem = server.Users.Edit(Str(m, "id"), m["name"] is JsonValue ? Str(m, "name") : null, Profile(m) ?? new());
                 if (problem == null && Groups(m) is { } groups) problem = server.Users.SetGroups(Str(m, "id"), groups);
@@ -292,8 +283,8 @@ public sealed class Session
             Error(m, module == null ? $"{server.Settings.Name} doesn't have the {id} module." : $"The {module.Name} module is switched off on {server.Settings.Name}.");
             return;
         }
-        var c = new ModuleChannel(this, ch, module.Id, user, Client, Clean(Str(m, "from"), 40),
-            server.Tokens.All().FirstOrDefault(t => t.Id == TokenId)?.Name ?? "");
+        if (user.Anonymous && !instance.Anonymous) { Error(m, $"Sign in to use {module.Name}."); return; }
+        var c = new ModuleChannel(this, ch, module.Id, user, Client, Clean(Str(m, "from"), 40));
         channels[ch] = c;
         Reply(m, new JsonObject { ["op"] = "opened", ["ch"] = ch });
         server.RaiseChanged();
@@ -312,7 +303,7 @@ public sealed class Session
         });
     }
 
-    private sealed class ModuleChannel(Session session, int id, string module, ServerUser user, string client, string from, string tokenName) : IModuleChannel
+    private sealed class ModuleChannel(Session session, int id, string module, ServerUser user, string client, string from) : IModuleChannel
     {
         private readonly Channel<JsonObject> inbox = Channel.CreateUnbounded<JsonObject>(new UnboundedChannelOptions { SingleReader = true });
 
@@ -321,8 +312,6 @@ public sealed class Session
         public string Client => client;
         public string From => from;
         public string Address => session.Address;
-        public string TokenId => session.TokenId;
-        public string TokenName => tokenName;
 
         public void Post(JsonNode message) => session.Post(new JsonObject { ["ch"] = id, ["msg"] = message });
 

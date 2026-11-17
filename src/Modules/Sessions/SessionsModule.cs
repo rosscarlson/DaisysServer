@@ -9,7 +9,8 @@ namespace DaisysServer.Modules.Sessions;
 /// Daisy's App's SimEffects → Analysis → Share Session: racing sessions (telemetry logs, gzipped as the client sends
 /// them) shared on the server, listed and downloaded by every user of it. Each question carries a rid its answer
 /// repeats; what's shared, changed or deleted is pushed to every open channel. Not sealed: every user reads them, so
-/// one store for the whole server. Admins find, remove and ban on its page.
+/// one store for the whole server. Admins find, remove and ban on its page. (Since 0.3.0) Clients that haven't signed in
+/// may share too: theirs are their install's (its device id), shown by their PC's name.
 /// </summary>
 [ServerModule("sessions", "Sessions", Description = "Daisy's App's Share Session: racing sessions shared with every user.", Icon = "")]
 public sealed class SessionsModule : IServerModule
@@ -25,6 +26,8 @@ public sealed class SessionsModule : IServerModule
     }
 
     public FrameworkElement? View => page ??= new SessionsPage(store, () => host.Users);
+
+    public bool Anonymous => true;
 
     public async Task ServeAsync(IModuleChannel channel, CancellationToken ct)
     {
@@ -101,7 +104,7 @@ public sealed class SessionsModule : IServerModule
         }
         catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
         {
-            host.Log.Warn($"{c.User.Name} on {c.Client}: {op} failed", ex);
+            host.Log.Warn($"{c.User.Describe(c.Client)}: {op} failed", ex);
             Error("The server couldn't do that: " + ex.Message);
         }
     }

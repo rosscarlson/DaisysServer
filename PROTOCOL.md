@@ -4,32 +4,36 @@ How a client (Daisy's App, Daisy's App Mobile, `tools/TestClient`) talks to Dais
 description of it.** The code is `src/DaisysServer.Core/Protocol/` (`Wire.cs`, `ServerClient.cs`), copied word for word
 into Daisy's App's `src/DaisysApp.Core/Server/`. A change to either copy goes into both.
 
-Version 1 (Daisy's Server 0.1.0, Daisy's App 3.26.4; its settings in Settings → General since 3.26.5). The `files`
-module (§5) came in Daisy's Server 0.1.1 and the `processes` module (§6) in 0.1.2, still version 1: a server without
-one says so when it's opened.
+Version 2 since Daisy's Server 0.3.0: the server's key instead of tokens, and signing in optional (anonymous clients
+can use the modules that allow it). A version 1 client (Daisy's Server 0.1.0 to 0.2.4, Daisy's App 3.26.4 until it
+takes these files) sees `v: 2` and says the server is newer: update it. The `files` module (§5) came in 0.1.1, the
+`processes` module (§6) in 0.1.2 and the `sessions` module (§7) in 0.2.0: a server without one says so when it's opened.
 
 ## 1. Connecting
 
 TCP to the server's port (38900 unless it's changed). Every frame, both ways, is a **4-byte little-endian length**
 followed by that many bytes.
 
-You need three things to connect: the server's address, its port, and a **token**. A token looks like
-`dsk1_<base64url, no padding>`. The 38 bytes inside are:
-
-- 6 bytes: the token's id. This is sent in the clear, as lowercase hex, so the server knows which token you're using.
-- 32 bytes: the token's secret. This is never sent.
+You need the server's address, its port, and its **key's fingerprint**: base64url, no padding, of SHA-256 of the
+server's public key (P-256, SubjectPublicKeyInfo DER), 43 characters. The server's Status page shows it (Copy). It isn't
+a secret. A client has it built in for a server it ships for, or keeps the one it sees the first time it connects to
+an address (trust on first use), and from then on connects only to a server with that key.
 
 ### Handshake (plain JSON frames)
 
-1. The server sends `{"app": "DaisysServer", "v": 1, "nonce": <base64, 32 bytes>, "pub": <base64>}`.
-   - `pub` is an ephemeral P-256 public key, SubjectPublicKeyInfo DER. That's Java's `PublicKey.getEncoded()` and
-     .NET's `ExportSubjectPublicKeyInfo`.
-   - If `app` isn't `DaisysServer`, it isn't a Daisy's Server. If `v` is higher than you know, the server is too new.
-2. The client sends `{"token": "<id, hex>", "nonce": <base64, 32 bytes>, "pub": <its ephemeral P-256 SPKI, base64>}`.
+1. The server sends `{"app": "DaisysServer", "v": 2, "nonce": <base64, 32 bytes>, "pub": <base64>, "key": <base64>}`.
+   - `pub` is an ephemeral P-256 public key, `key` the server's own; both SubjectPublicKeyInfo DER. That's Java's
+     `PublicKey.getEncoded()` and .NET's `ExportSubjectPublicKeyInfo`.
+   - If `app` isn't `DaisysServer`, it isn't a Daisy's Server. If `v` is higher than you know, the server is too new;
+     lower, too old.
+   - If you know the fingerprint and `key`'s isn't it, **stop**: close without sending anything, and tell the user it
+     may not be their server (if they reinstalled it, they forget the old key). If you don't, keep this one.
+2. The client sends `{"nonce": <base64, 32 bytes>, "pub": <its ephemeral P-256 SPKI, base64>}`.
 3. Both sides work out the keys:
-   - `shared` = ECDH(P-256): the raw x coordinate, 32 bytes. That's what Java's `KeyAgreement("ECDH")` returns.
-   - `keys` = HKDF-SHA256(ikm = `shared`, salt = the token's 32-byte secret,
-     info = ASCII `"DaisysServer v1"` ‖ server nonce ‖ client nonce, length 64).
+   - `ee` = ECDH(the client's ephemeral key, the server's ephemeral key); `es` = ECDH(the client's ephemeral key, the
+     server's key). Each is the raw x coordinate, 32 bytes: what Java's `KeyAgreement("ECDH")` returns.
+   - `keys` = HKDF-SHA256(ikm = `ee` ‖ `es`, salt = SHA-256(server `pub` ‖ client `pub` ‖ `key`, the DER bytes as sent),
+     info = ASCII `"DaisysServer v2"` ‖ server nonce ‖ client nonce, length 64).
    - Bytes 0–31 are the client→server key. Bytes 32–63 are the server→client key.
 
 ### Encrypted frames
@@ -41,27 +45,31 @@ After the handshake, every frame is one JSON message (UTF-8), sealed with **AES-
   from 0.
 - There's no associated data.
 
-Each side counts the other's frames. A frame that doesn't open (the wrong token, tampering, a replay or a reorder) ends
-the connection.
+Each side counts the other's frames. A frame that doesn't open (tampering, a replay or a reorder, or a server without
+its key) ends the connection.
 
-The ephemeral keys give forward secrecy. Without the token's secret, nobody can make the keys, so a man in the middle
-fails on the first frame, and so does a fake server.
+The ephemeral keys give forward secrecy. `es` means only the server with that key can make the keys, so once the
+fingerprint is checked a man in the middle, or a fake server, fails on the first frame. The handshake doesn't say who
+the client is: signing in (§2) does, and a client that doesn't is anonymous.
 
 ### Hello
 
 | Client | Server |
 |---|---|
-| `{"op": "hello", "client": "<device name>", "app": "<app name>", "v": 1}` | `{"op": "welcome", "server": "<its name>", "version": "0.1.0", "v": 1, "modules": [{id, name, version}]}` |
+| `{"op": "hello", "client": "<device name>", "app": "<app name>", "v": 2, "device": "<install id>"}` | `{"op": "welcome", "server": "<its name>", "version": "0.3.0", "v": 2, "modules": [{id, name, version, anonymous}]}` |
 
-`modules` lists the modules switched on there.
-
-If the token is unknown or revoked, or the secret is wrong, the server says nothing. It waits about 1.5 s and closes the
-connection, so guessing is slow. A client that's closed on before `welcome` should tell the user *the server didn't
-accept the token*.
+`modules` lists the modules switched on there; `anonymous` is true for those a client may use without signing in (now
+`sessions`). `device` (since 0.3.0) is a random id the install makes once (16 characters or more; 32 hex is fine), keeps
+and never shows: the server keeps only a hash of it, and an anonymous client's shared sessions are its own by it. A
+client without one gets one made up for the connection.
 
 ## 2. Signing in
 
 Users are made on the server, by its window or by an admin client. A user's password never leaves the client.
+
+Since 0.3.0 signing in is **optional**. A connection that doesn't is anonymous: it can `ping` and `open` channels to the
+modules that allow it (`anonymous` in `welcome`); another module answers `open` with *Sign in to use …*, and anything
+else with *Sign in first.* Sign in before opening channels: a channel stays with whoever opened it.
 
 1. `{"op": "prelogin", "user"}` → `{"op": "prelogin", "salt": <base64, 16 bytes>, "iter": 210000}`.
    - A name with no user still gets a salt. It's made up, but it's the same every time, so a client can't tell which
@@ -72,9 +80,10 @@ Users are made on the server, by its window or by an admin client. A user's pass
    - `wrap` = HMAC-SHA256(key = `master`, message = ASCII `"DaisysServer wrap"`).
 3. `{"op": "login", "user", "auth": <base64>}` → `{"op": "login", "user", "admin": bool, "vault": <sealed> | null}`.
    - A wrong name or password gets `{"op": "error", "message": "Wrong user name or password."}` after a second's pause.
-   - Since 0.2.2 each token is for one user: anyone else signing in with it gets an `error` ("This token is for
-     another user"). Tokens made before are for any user until they're tied to one on the server.
    - After 5 wrong tries, the connection is closed.
+   - Since 0.3.0 wrong passwords are counted by IP address: 5 in 15 minutes and that address can't sign in for 15
+     minutes after the last, even with the right password (`error`: *Too many wrong passwords from your address: try
+     again in N minutes.*). It can still connect anonymously.
    - The server keeps only SHA-256(its salt ‖ `auth`), never `auth` itself.
 4. `vault` is the user's **data key**: 32 random bytes, sealed with `wrap` (see *Sealing* below).
    - If it's null, this is the user's first sign-in. Make 32 random bytes, seal them with `wrap`, and send
@@ -94,7 +103,7 @@ one. Their connections are closed with `bye`.
 
 ## 3. After signing in
 
-Every question can carry a `"rid"` (a number). Its answer, or its `error`, carries the same `rid`.
+`ping`, `open` and `close` work without signing in too (§2). Every question can carry a `"rid"` (a number). Its answer, or its `error`, carries the same `rid`.
 
 | Ask | Answer |
 |---|---|
@@ -103,16 +112,15 @@ Every question can carry a `"rid"` (a number). Its answer, or its `error`, carri
 | `{"op": "close", "ch"}` | Ends a channel. Not answered. |
 | `{"op": "password", …}` | See above. |
 | **Admins only:** `{"op": "users"}` | `{"op": "users", "users": [{id, name, admin, created, lastSignIn, profile, groups}], "fields": [{key, label, max}], "groups": [names]}`. Since 0.2.1, `fields` lists the profile fields (now `displayName` and `email`; more may come, so show what's listed), and each user's `profile` has a string for each (empty when unset). Since 0.2.3, `groups` lists the groups there are (now `Admin`, `User`, `SE-Analysis`) and each user's `groups` theirs; being in `Admin` is `admin`. |
-| `{"op": "useradd", "name", "password", "admin", "profile", "groups"}` | `{"op": "useradd", "token"}`. The password goes over the encrypted connection, and the server makes the verifier from it. `profile` (since 0.2.1, optional): `{key: value}` for the fields. `token` (since 0.2.2): theirs, made with them, to give them. `groups` (since 0.2.3, optional; else `User`, and `Admin` with `admin`) decides `admin`. |
-| `{"op": "usertoken", "id"}` (since 0.2.2) | `{"op": "usertoken", "token"}`: another token for that user (a second device, or to replace one; revoking is on the server). |
+| `{"op": "useradd", "name", "password", "admin", "profile", "groups"}` | `{"op": "useradd"}`. The password goes over the encrypted connection, and the server makes the verifier from it. `profile` (since 0.2.1, optional): `{key: value}` for the fields. (0.2.2 to 0.2.4 answered with the user's `token`; there are none since 0.3.0.) `groups` (since 0.2.3, optional; else `User`, and `Admin` with `admin`) decides `admin`. |
 | `{"op": "useredit", "id", "name", "profile", "groups"}` (since 0.2.1) | `{"op": "useredit"}`, or an `error` (a name taken, a bad email). `name` (optional) renames them: their password and data stay. `profile` sets the fields given (an empty string clears one); keys the server doesn't know are ignored. `groups` (since 0.2.3, optional) sets theirs (unknown ones ignored; not the last admin's Admin). |
-| `{"op": "userdelete", "id"}`, `{"op": "useradmin", "id", "admin"}`, `{"op": "userpassword", "id", "password"}` | Their op echoed back, or an `error`. `userpassword` deletes the user's data (see above). `userdelete` revokes their tokens (since 0.2.2). |
+| `{"op": "userdelete", "id"}`, `{"op": "useradmin", "id", "admin"}`, `{"op": "userpassword", "id", "password"}` | Their op echoed back, or an `error`. `userpassword` deletes the user's data (see above). (`usertoken`, 0.2.2 to 0.2.4, is gone.) |
 
 The server can send these at any time:
 
 - `{"op": "close", "ch", "message"}`: the module ended the channel.
-- `{"op": "bye", "message"}`: the connection is ending. The token was revoked, the account was changed, the server is
-  stopping, or there were too many tries.
+- `{"op": "bye", "message"}`: the connection is ending. The account was changed, the server is stopping, or there were
+  too many tries.
 
 An op the server doesn't know gets an `error` saying *This server can't do "…" yet: update it.*
 
@@ -126,11 +134,10 @@ A message on a channel goes both ways as `{"ch": n, "msg": {…}}`, with no `op`
 
 The server hands each channel to the module named in `open`, along with:
 
-- the signed-in user,
+- the signed-in user (or, since 0.3.0, an anonymous one),
 - the client's name,
 - `from`,
-- (since 0.2.0) the connection's IP address and token (for the `sessions` module's record of who shared what, and its
-  bans).
+- (since 0.2.0) the connection's IP address (for the `sessions` module's record of who shared what, and its bans).
 
 Each user's data is kept apart, in `%LOCALAPPDATA%\DaisysServer\data\users\<user id>\<module>\`. A module switched off
 on the server isn't loaded at all.
@@ -274,8 +281,7 @@ server, listed and downloaded by every user of it. Daisy's App's side is `Sessio
 **Not sealed, and one store for the whole server.** Every user must be able to read what's shared, so sessions aren't
 sealed with anyone's data key: they're readable on the server's disk, in `%LOCALAPPDATA%\DaisysServer\data\sessions\`
 (`sessions.json`, the index; `<id>.gz`, each session's file exactly as it came; `bans.json`). On the way they're as
-safe as everything else: the connection's AES-256-GCM, with keys from an ephemeral ECDH P-256 exchange salted with the
-token's secret.
+safe as everything else: the connection's AES-256-GCM, with keys only the server with its key can make (§1).
 
 Every question carries a `rid`. Its answer has the same `op` and `rid`, or is `{op: "error", rid, message}` (worded for
 people). Questions are answered in order.
@@ -293,7 +299,7 @@ people). Questions are answered in order.
 `{op: "changed", session: meta}`, `{op: "removed", id}`.
 
 - **meta:** `{id, title, description, driver, game, track, car, class, laps, best, started, video, videoAt, user,
-  client, shared, size, mine}`. The client sends the first thirteen but `id` (fields the server doesn't know are kept
+  client, shared, size, mine, displayName, anonymous}`. The client sends the first thirteen but `id` (fields the server doesn't know are kept
   as they came); the server sets `id` (16 hex characters), `user` (the sharer's name), `client` (their PC), `shared`
   (ms since 1970, UTC, when it was completed) and `size`, whatever the client says. `mine` is worked out for each
   recipient: true when they shared it. `displayName` (since 0.2.4) is the sharer's display name (their user name
@@ -301,10 +307,13 @@ people). Questions are answered in order.
   name shows on every session (Daisy's App 4.17.21 sends no `driver`, and names the sharer by it). `started` is ms since 1970, UTC; `best` seconds (0 for none); `videoAt` seconds
   or null. `video` must be an `https://` link (anything else is kept as null). Text is clipped (a title to 200
   characters, a description to 4000).
-- **Who:** any signed-in user can `list`, `get` and `share`. Only the sharer, or an admin, can `edit` or `delete`;
-  anyone else gets *Only the person who shared it can change it.*
-- **Bans** (made on the server's Sessions tab): a banned user, PC (the client's name, any case), IP address or range
-  (`203.0.113.0/24`), or token can't `share` or `edit` (*You can't share sessions on this server.*), but can still
-  `list` and `get`. Banning removes every session that matches it. The server keeps each session's address and token,
-  but never sends them.
+- **Who:** any signed-in user, and (since 0.3.0) any anonymous client, can `list`, `get` and `share`. Only the sharer,
+  or an admin, can `edit` or `delete`; anyone else gets *Only the person who shared it can change it.*
+- **Anonymous** (since 0.3.0): a session shared without signing in has `user` "", `anonymous: true` and `displayName`
+  the PC's name (`client`). It's its install's: `mine`, and theirs to `edit` and `delete`, on any connection with the
+  same `device` (§1, Hello), signed in or not; another install with the same PC name gets the refusal.
+- **Bans** (made on the server's Sessions tab): a banned user (an anonymous one: their install), PC (the client's
+  name, any case), or IP address or range (`203.0.113.0/24`) can't `share` or `edit` (*You can't share sessions on
+  this server.*), but can still `list` and `get`. Banning removes every session that matches it. The server keeps each
+  session's address and who shared it, but never sends them. (Token bans, before 0.3.0, are gone.)
 - The `.gz` is a gzip of Daisy's App's session export (UTF-8 CSV). The server doesn't open it.

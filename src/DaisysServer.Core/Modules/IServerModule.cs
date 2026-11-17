@@ -17,8 +17,17 @@ public sealed class ServerModuleAttribute(string id, string name) : Attribute
 }
 
 /// <summary>A signed-in user, as a module sees them: their data is theirs alone (<see cref="IModuleHost.FolderFor"/>).
-/// (Since 0.2.4) <paramref name="DisplayName"/>: what others see (their name when they haven't one).</summary>
-public sealed record ServerUser(string Id, string Name, bool Admin, string DisplayName = "");
+/// (Since 0.2.4) <paramref name="DisplayName"/>: what others see (their name when they haven't one). (Since 0.3.0) Or
+/// <see cref="Anonymous"/>: a client that didn't sign in, to a module that allows it (<see cref="IServerModule.Anonymous"/>):
+/// its Id is "anon:" and a hash of the id its install made (the same each time it connects), its Name empty, its
+/// DisplayName its PC's name.</summary>
+public sealed record ServerUser(string Id, string Name, bool Admin, string DisplayName = "")
+{
+    public const string AnonymousPrefix = "anon:";
+    public bool Anonymous => Id.StartsWith(AnonymousPrefix, StringComparison.Ordinal);
+    /// <summary>For the log: "name on PC", or "anonymous on PC".</summary>
+    public string Describe(string client) => $"{(Anonymous ? "anonymous" : Name)} on {client}";
+}
 
 /// <summary>
 /// A server module: a class library in modules\&lt;Name&gt;\DaisysServer.&lt;Name&gt;.dll with one class implementing this,
@@ -39,6 +48,9 @@ public interface IServerModule : IDisposable
     /// <summary>Its card in the server's Settings (after Modules), or null for none. Settings save as they change.</summary>
     FrameworkElement? SettingsView => null;
 
+    /// <summary>(since 0.3.0) Clients that haven't signed in may open channels to it (<see cref="ServerUser.Anonymous"/>).</summary>
+    bool Anonymous => false;
+
     /// <summary>A user was deleted, or their password reset (their data can't be opened any more): forget it.</summary>
     void UserRemoved(ServerUser user);
 }
@@ -46,15 +58,13 @@ public interface IServerModule : IDisposable
 /// <summary>A conversation between a client's module and this one, over that client's encrypted connection.</summary>
 public interface IModuleChannel : IDisposable
 {
-    /// <summary>Who signed in on that connection.</summary>
+    /// <summary>Who signed in on that connection (or an anonymous one, see <see cref="ServerUser.Anonymous"/>).</summary>
     ServerUser User { get; }
     /// <summary>The client's name (its PC or device), and the id of its module on the client side (its "from").</summary>
     string Client { get; }
     string From { get; }
-    /// <summary>(since 0.2.0) The connection's IP address, and the token it came with (its id and name).</summary>
+    /// <summary>(since 0.2.0) The connection's IP address.</summary>
     string Address => "";
-    string TokenId => "";
-    string TokenName => "";
     /// <summary>Sends a message (queued: they go in order).</summary>
     void Post(JsonNode message);
     /// <summary>The next message, or null when the client has closed the channel or gone.</summary>

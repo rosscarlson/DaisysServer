@@ -22,6 +22,9 @@ public sealed class ServerSettings
     public List<string> DisabledModules { get; set; } = new();
     /// <summary>A random secret of this server's (base64): the made-up salts for user names it doesn't have.</summary>
     public string Secret { get; set; } = "";
+    /// <summary>(since 0.3.0) The server's key (P-256, PKCS#8, base64): clients know it by its fingerprint, so losing it
+    /// means every client has to trust the server again. Made the first time.</summary>
+    public string Key { get; set; } = "";
     public string? LastPage { get; set; }
     public double[]? Bounds { get; set; }
 
@@ -32,6 +35,13 @@ public sealed class ServerSettings
         {
             s.Secret = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
             s.Save();
+        }
+        if (s.Key.Length == 0)
+        {
+            using var key = System.Security.Cryptography.ECDiffieHellman.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+            s.Key = Convert.ToBase64String(key.ExportPkcs8PrivateKey());
+            s.Save();
+            ModuleLog.Server.Info("Made the server's key");
         }
         if (s.Port is < 1 or > 65535) s.Port = DefaultPort;
         return s;

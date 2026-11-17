@@ -10,8 +10,9 @@ using DaisysServer.Server;
 namespace DaisysServer.Pages;
 
 /// <summary>
-/// Status: whether it's listening (Start / Stop), the addresses clients use, the steps to get going while there are
-/// no users or tokens, and the connections: who, from where, signed in as whom, using which modules.
+/// Status: whether it's listening (Start / Stop), the addresses clients use, the server's key (Copy), the steps to get
+/// going while there are no users, and the connections: who, from where, signed in as whom (or anonymous), using which
+/// modules.
 /// </summary>
 internal sealed class StatusPage : UserControl
 {
@@ -37,6 +38,16 @@ internal sealed class StatusPage : UserControl
         top.Children.Add(Ui.Header("Server"));
         top.Children.Add(Ui.Row(dot, state, toggle));
         top.Children.Add(addresses);
+        var key = new TextBox { Text = server.Fingerprint, IsReadOnly = true, Width = 380, FontFamily = new System.Windows.Media.FontFamily("Consolas") };
+        System.Windows.Automation.AutomationProperties.SetName(key, "Server key");
+        var copyKey = Ui.Button("\ue8c8", "", "Copy the server key", () =>
+        {
+            try { Clipboard.SetText(server.Fingerprint); } catch (System.Runtime.InteropServices.ExternalException) { }
+        });
+        copyKey.Margin = new Thickness(8, 0, 0, 0);
+        var keyRow = Ui.Row(Ui.Label("Server key"), key, copyKey);
+        keyRow.Margin = new Thickness(0, 10, 0, 0);
+        top.Children.Add(keyRow);
         var find = Ui.Button("", "Show public address", "Asks api.ipify.org what this network's address is on the internet", () => _ = FindPublicAsync());
         find.Margin = new Thickness(0, 8, 12, 0);
         publicAddress.VerticalAlignment = VerticalAlignment.Center;
@@ -79,13 +90,13 @@ internal sealed class StatusPage : UserControl
         ((TextBlock)((StackPanel)toggle.Content).Children[0]).Text = server.Listening ? "" : "";
 
         var ips = LocalAddresses();
-        addresses.Text = $"Clients connect to this PC's address and port {server.Settings.Port}, with a token and a user's name and password.\n" +
+        addresses.Text = $"Clients connect to this PC's address and port {server.Settings.Port}, signed in as a user or not (Sessions only).\n" +
             (ips.Count > 0 ? $"On this network: {string.Join(", ", ips)}\n" : "") +
             $"From the internet: forward TCP port {server.Settings.Port} on your router to this PC, and use your public address (or a DNS name for it).";
 
         steps.Children.Clear();
-        bool users = server.Users.Any(), tokens = server.Tokens.Any();
-        gettingStarted.Visibility = users && tokens ? Visibility.Collapsed : Visibility.Visible;
+        bool users = server.Users.Any();
+        gettingStarted.Visibility = users ? Visibility.Collapsed : Visibility.Visible;
         void Step(int n, string text, bool done, string page, string button)
         {
             var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
@@ -102,8 +113,7 @@ internal sealed class StatusPage : UserControl
             steps.Children.Add(row);
         }
         Step(1, "Add a user for each person (admin for yourself). Each user's data is theirs alone, sealed with their password.", users, "users", "Users");
-        Step(2, "Paste each user's token (made with them; Copy on Users) into their client (Daisy's App: Settings → Tools → Notepad → Daisy's Server) with this server's address and port.", tokens, "users", "Users");
-        Step(3, $"Let clients reach port {server.Settings.Port}: the installer opened Windows Firewall for it; from the internet, forward it on your router.", false, "settings", "Settings");
+        Step(2, $"Let clients reach port {server.Settings.Port}: the installer opened Windows Firewall for it; from the internet, forward it on your router.", false, "settings", "Settings");
 
         table.Children.Clear();
         table.RowDefinitions.Clear();
@@ -129,7 +139,7 @@ internal sealed class StatusPage : UserControl
         Add(heads, true);
         var sessions = server.Sessions().Where(s => s.Client.Length > 0).ToList();
         foreach (var s in sessions)
-            Add([s.Client, s.User?.Name ?? "(signing in)", s.Address, s.App, s.Open.Count == 0 ? "—" : string.Join(", ", s.Open), s.Since.ToString("g")], false);
+            Add([s.Client, s.User?.Name ?? "(anonymous)", s.Address, s.App, s.Open.Count == 0 ? "—" : string.Join(", ", s.Open), s.Since.ToString("g")], false);
         if (sessions.Count == 0) Add(["Nobody yet", "", "", "", "", ""], false);
     }
 

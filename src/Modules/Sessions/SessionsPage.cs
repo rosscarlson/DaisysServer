@@ -7,12 +7,13 @@ using DaisysServer.Modules;
 namespace DaisysServer.Modules.Sessions;
 
 /// <summary>The module's page: every session shared, searched in every column, picked one or many to remove or to ban
-/// whoever shared them (their user, PC, address or token: banning removes all of theirs); and the bans.</summary>
+/// whoever shared them (their user, an anonymous one's install, PC or address: banning removes all of theirs); and the
+/// bans.</summary>
 internal sealed class SessionsPage : UserControl
 {
     /// <summary>A session's row.</summary>
     public sealed record Line(string Id, DateTime Shared, string Title, string Description, string Driver, string Game, string Track, string Car,
-        string Class, int Laps, string Best, string User, string Client, string Address, string Token, string Size, string Video, SessionStore.Row Row);
+        string Class, int Laps, string Best, string User, string Client, string Address, string Size, string Video, SessionStore.Row Row);
 
     private readonly SessionStore store;
     private readonly Func<IReadOnlyList<ServerUser>> users;
@@ -45,7 +46,6 @@ internal sealed class SessionsPage : UserControl
             Spaced(Ui.Confirm("", "Ban user", "Stop the picked sessions' users sharing, and remove all of theirs", () => BanPicked(SessionStore.BanKind.User))),
             Spaced(Ui.Confirm("", "Ban PC", "Stop the picked sessions' PCs sharing, and remove all of theirs", () => BanPicked(SessionStore.BanKind.PC))),
             Spaced(Ui.Confirm("", "Ban address", "Stop the picked sessions' IP addresses sharing, and remove all of theirs", () => BanPicked(SessionStore.BanKind.Address))),
-            Spaced(Ui.Confirm("", "Ban token", "Stop the picked sessions' tokens sharing, and remove all of theirs", () => BanPicked(SessionStore.BanKind.Token))),
             result);
         result.VerticalAlignment = VerticalAlignment.Center;
         top.Children.Add(actions);
@@ -62,7 +62,6 @@ internal sealed class SessionsPage : UserControl
         grid.Columns.Add(Column("User", nameof(Line.User)));
         grid.Columns.Add(Column("PC", nameof(Line.Client)));
         grid.Columns.Add(Column("Address", nameof(Line.Address)));
-        grid.Columns.Add(Column("Token", nameof(Line.Token)));
         grid.Columns.Add(Column("Size", nameof(Line.Size)));
         grid.Columns.Add(Column("Video", nameof(Line.Video)));
         grid.SelectionChanged += (_, _) => picked.Text = grid.SelectedItems.Count > 0 ? $"{grid.SelectedItems.Count} picked" : "";
@@ -114,12 +113,12 @@ internal sealed class SessionsPage : UserControl
         var keep = grid.SelectedItems.OfType<Line>().Select(l => l.Id).ToHashSet();
         string[] words = search.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var lines = rows.Select(r => new Line(r.Id, r.Shared, r.Title, r.Description, r.Driver, r.Game, r.Track, r.Car, r.Class, r.Laps,
-                r.Best > 0 ? TimeSpan.FromSeconds(r.Best).ToString(@"m\:ss\.fff") : "", r.User, r.Client, r.Address, r.Token, Ui.Size(r.Size), r.Video, r))
+                r.Best > 0 ? TimeSpan.FromSeconds(r.Best).ToString(@"m\:ss\.fff") : "", r.User, r.Client, r.Address, Ui.Size(r.Size), r.Video, r))
             .Where(l =>
             {
                 if (words.Length == 0) return true;
                 string all = string.Join(" ", l.Shared.ToString("d MMM yyyy HH:mm"), l.Title, l.Description, l.Driver, l.Game, l.Track, l.Car, l.Class,
-                    l.Laps, l.Best, l.User, l.Client, l.Address, l.Token, l.Video, l.Id);
+                    l.Laps, l.Best, l.User, l.Client, l.Address, l.Video, l.Id);
                 return words.All(w => all.Contains(w, StringComparison.OrdinalIgnoreCase));
             }).ToList();
         grid.ItemsSource = lines;
@@ -142,9 +141,9 @@ internal sealed class SessionsPage : UserControl
         if (p.Count == 0) { result.Text = "Pick sessions first"; return; }
         var who = p.Select(r => kind switch
             {
-                SessionStore.BanKind.User => (Value: r.UserId, Name: r.User),
+                // (an anonymous one: their install)
+                SessionStore.BanKind.User => (Value: r.UserId, Name: r.UserId.StartsWith(ServerUser.AnonymousPrefix) ? $"{r.Client} (anonymous)" : r.User),
                 SessionStore.BanKind.PC => (Value: r.Client, Name: r.Client),
-                SessionStore.BanKind.Token => (Value: r.TokenId, Name: r.Token.Length > 0 ? r.Token : r.TokenId),
                 _ => (Value: r.Address, Name: r.Address),
             }).Where(w => w.Value.Length > 0).DistinctBy(w => w.Value).ToList();
         int removed = who.Sum(w => store.AddBan(kind, w.Value, w.Name, ""));

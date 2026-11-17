@@ -10,60 +10,34 @@ namespace DaisysServer.Protocol;
 // (src/DaisysApp.Core/Server): a change here goes there too. PROTOCOL.md describes it.
 
 /// <summary>
-/// A connection token: "dsk1_" then, base64url, 6 bytes of id (sent in the clear, so the server knows which token) and
-/// 32 bytes of secret (never sent: both ends prove they have it by deriving the same keys).
+/// The server's key: a P-256 key pair it makes once and keeps. Clients know it by its fingerprint (base64url, no padding,
+/// of SHA-256 of the public key's SubjectPublicKeyInfo), built in or kept from the first connection, and connect only
+/// to the server that has it: nobody else can make the connection's keys (<see cref="Wire"/>). Not a secret.
 /// </summary>
-public static class Token
+public static class ServerKey
 {
-    public const string Prefix = "dsk1_";
-    private const int IdBytes = 6, SecretBytes = 32;
-
-    public static string Make(out string id, out byte[] secret)
-    {
-        var raw = RandomNumberGenerator.GetBytes(IdBytes + SecretBytes);
-        id = Convert.ToHexString(raw, 0, IdBytes).ToLowerInvariant();
-        secret = raw[IdBytes..];
-        return Prefix + Base64Url(raw);
-    }
-
-    public static string Format(string id, byte[] secret) => Prefix + Base64Url([.. Convert.FromHexString(id), .. secret]);
-
-    /// <summary>The token's id and secret; throws FormatException for anything that isn't one.</summary>
-    public static (string Id, byte[] Secret) Parse(string token)
-    {
-        token = token.Trim();
-        if (!token.StartsWith(Prefix, StringComparison.Ordinal)) throw new FormatException("That isn't a Daisy's Server token (it starts with dsk1_).");
-        byte[] raw;
-        try { raw = FromBase64Url(token[Prefix.Length..]); }
-        catch (FormatException) { throw new FormatException("The token is damaged: copy it again."); }
-        if (raw.Length != IdBytes + SecretBytes) throw new FormatException("The token is damaged: copy it again.");
-        return (Convert.ToHexString(raw, 0, IdBytes).ToLowerInvariant(), raw[IdBytes..]);
-    }
+    public static string Fingerprint(byte[] spki) => Base64Url(SHA256.HashData(spki));
 
     public static string Base64Url(byte[] b) => Convert.ToBase64String(b).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-
-    public static byte[] FromBase64Url(string s)
-    {
-        s = s.Replace('-', '+').Replace('_', '/');
-        return Convert.FromBase64String(s + new string('=', (4 - s.Length % 4) % 4));
-    }
 }
 
-/// <summary>The other end didn't prove it has the token (or it's revoked).</summary>
+/// <summary>The server's key isn't the one the client expected.</summary>
 public sealed class WireAuthException(string message) : Exception(message);
 
 /// <summary>
 /// One encrypted connection. Frames are a 4-byte little-endian length then that many bytes. The server's first frame
-/// and the client's answer are plain JSON (an ephemeral P-256 key and 32 random bytes each, and the token's id); both
-/// derive two AES-256-GCM keys (one each way) with HKDF-SHA256 from the ECDH secret, salted with the token's secret.
-/// After that every frame is one JSON message, encrypted: ciphertext then the 16-byte tag; the nonce isn't sent, it's
-/// 4 zero bytes then a little-endian uint64 count of the frames sent that way. Thread-safe for one reader and any
-/// number of senders.
+/// and the client's answer are plain JSON: an ephemeral P-256 key and 32 random bytes each, and the server's own key
+/// (<see cref="ServerKey"/>). Both derive two AES-256-GCM keys (one each way) with HKDF-SHA256 from two ECDH secrets
+/// (the two ephemeral keys; the client's ephemeral and the server's key), so only the server with that key can. After
+/// that every frame is one JSON message, encrypted: ciphertext then the 16-byte tag; the nonce isn't sent, it's 4 zero
+/// bytes then a little-endian uint64 count of the frames sent that way. Thread-safe for one reader and any number of
+/// senders.
 /// </summary>
 public sealed class Wire : IDisposable
 {
     public const string App = "DaisysServer";
-    public const int Version = 1;
+    /// <summary>2 since Daisy's Server 0.3.0: the server's key, no tokens.</summary>
+    public const int Version = 2;
     public const int MaxFrame = 32 << 20;
 
     private readonly Stream stream;
@@ -72,6 +46,9 @@ public sealed class Wire : IDisposable
     private readonly SemaphoreSlim sendGate = new(1, 1);
     private int disposed;
 
+    /// <summary>The server's key's fingerprint (the client's side).</summary>
+    public string ServerKey { get; private init; } = "";
+
     private Wire(Stream stream, byte[] sendKey, byte[] readKey)
     {
         this.stream = stream;
@@ -79,49 +56,64 @@ public sealed class Wire : IDisposable
         this.readKey = new AesGcm(readKey, 16);
     }
 
-    /// <summary>The client's side: the server's greeting, then ours with the token's id; the keys from both.</summary>
-    public static async Task<Wire> ConnectAsync(Stream stream, string token, CancellationToken ct)
+    /// <summary>The client's side: the server's greeting (its key, which must be <paramref name="serverKey"/>'s
+    /// fingerprint unless that's empty: then any, kept by the caller), then ours; the keys from both.</summary>
+    public static async Task<Wire> ConnectAsync(Stream stream, string? serverKey, CancellationToken ct)
     {
-        var (id, secret) = Token.Parse(token);
         var hello = await ReadPlainAsync(stream, ct) ?? throw new IOException("The server closed the connection.");
         if ((string?)hello["app"] != App) throw new IOException("That address isn't a Daisy's Server.");
         if ((int?)hello["v"] is not int v || v > Version) throw new IOException("The server is newer than this client: update it.");
-        byte[] serverNonce = Convert.FromBase64String((string)hello["nonce"]!), serverPub = Convert.FromBase64String((string)hello["pub"]!);
+        if (v < Version) throw new IOException("The server is older than this client: update it (to 0.3.0 or later).");
+        byte[] serverNonce = Convert.FromBase64String((string)hello["nonce"]!), serverPub = Convert.FromBase64String((string)hello["pub"]!),
+            key = Convert.FromBase64String((string)hello["key"]!);
+        string fingerprint = global::DaisysServer.Protocol.ServerKey.Fingerprint(key);
+        if (!string.IsNullOrEmpty(serverKey) && serverKey != fingerprint)
+            throw new WireAuthException("The server's key isn't the one this client knows: it may not be your server.");
         using var ecdh = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
         var nonce = RandomNumberGenerator.GetBytes(32);
-        await WritePlainAsync(stream, new JsonObject
-        {
-            ["token"] = id, ["nonce"] = Convert.ToBase64String(nonce), ["pub"] = Convert.ToBase64String(ecdh.ExportSubjectPublicKeyInfo()),
-        }, ct);
-        var (c2s, s2c) = Keys(ecdh, serverPub, secret, serverNonce, nonce);
-        return new Wire(stream, c2s, s2c);
+        byte[] pub = ecdh.ExportSubjectPublicKeyInfo();
+        await WritePlainAsync(stream, new JsonObject { ["nonce"] = Convert.ToBase64String(nonce), ["pub"] = Convert.ToBase64String(pub) }, ct);
+        using var server = Import(serverPub);
+        using var serverKeyPub = Import(key);
+        byte[] ikm = [.. ecdh.DeriveRawSecretAgreement(server.PublicKey), .. ecdh.DeriveRawSecretAgreement(serverKeyPub.PublicKey)];
+        var (c2s, s2c) = Keys(ikm, serverPub, pub, key, serverNonce, nonce);
+        return new Wire(stream, c2s, s2c) { ServerKey = fingerprint };
     }
 
-    /// <summary>The server's side: our greeting, the client's answer, the keys. <paramref name="secretOf"/> gives a
-    /// token's secret from its id (null: no such token).</summary>
-    public static async Task<(Wire Wire, string TokenId)> AcceptAsync(Stream stream, Func<string, byte[]?> secretOf, CancellationToken ct)
+    /// <summary>The server's side: our greeting (with <paramref name="key"/>'s public half), the client's answer, the
+    /// keys.</summary>
+    public static async Task<Wire> AcceptAsync(Stream stream, ECDiffieHellman key, CancellationToken ct)
     {
         using var ecdh = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
         var nonce = RandomNumberGenerator.GetBytes(32);
+        byte[] pub = ecdh.ExportSubjectPublicKeyInfo(), keyPub = key.ExportSubjectPublicKeyInfo();
         await WritePlainAsync(stream, new JsonObject
         {
-            ["app"] = App, ["v"] = Version, ["nonce"] = Convert.ToBase64String(nonce), ["pub"] = Convert.ToBase64String(ecdh.ExportSubjectPublicKeyInfo()),
+            ["app"] = App, ["v"] = Version, ["nonce"] = Convert.ToBase64String(nonce), ["pub"] = Convert.ToBase64String(pub),
+            ["key"] = Convert.ToBase64String(keyPub),
         }, ct);
         var answer = await ReadPlainAsync(stream, ct) ?? throw new IOException("closed before the handshake");
-        string id = (string?)answer["token"] ?? "";
-        var secret = secretOf(id) ?? throw new WireAuthException($"unknown token {id}");
         byte[] clientNonce = Convert.FromBase64String((string)answer["nonce"]!), clientPub = Convert.FromBase64String((string)answer["pub"]!);
-        var (c2s, s2c) = Keys(ecdh, clientPub, secret, nonce, clientNonce);
-        return (new Wire(stream, s2c, c2s), id);
+        using var client = Import(clientPub);
+        byte[] ikm = [.. ecdh.DeriveRawSecretAgreement(client.PublicKey), .. key.DeriveRawSecretAgreement(client.PublicKey)];
+        var (c2s, s2c) = Keys(ikm, pub, clientPub, keyPub, nonce, clientNonce);
+        return new Wire(stream, s2c, c2s);
     }
 
-    private static (byte[] C2S, byte[] S2C) Keys(ECDiffieHellman mine, byte[] theirPub, byte[] secret, byte[] serverNonce, byte[] clientNonce)
+    private static ECDiffieHellman Import(byte[] spki)
     {
-        using var theirs = ECDiffieHellman.Create();
-        theirs.ImportSubjectPublicKeyInfo(theirPub, out _);
-        var shared = mine.DeriveRawSecretAgreement(theirs.PublicKey);
-        byte[] info = [.. Encoding.ASCII.GetBytes("DaisysServer v1"), .. serverNonce, .. clientNonce];
-        var keys = HKDF.DeriveKey(HashAlgorithmName.SHA256, shared, 64, secret, info);
+        var k = ECDiffieHellman.Create();
+        k.ImportSubjectPublicKeyInfo(spki, out _);
+        return k;
+    }
+
+    /// <summary>HKDF-SHA256: the two ECDH secrets, salted with SHA-256 of the three public keys (server's ephemeral,
+    /// client's, server's key), the info "DaisysServer v2" then both nonces.</summary>
+    private static (byte[] C2S, byte[] S2C) Keys(byte[] ikm, byte[] serverPub, byte[] clientPub, byte[] key, byte[] serverNonce, byte[] clientNonce)
+    {
+        byte[] salt = SHA256.HashData([.. serverPub, .. clientPub, .. key]);
+        byte[] info = [.. Encoding.ASCII.GetBytes("DaisysServer v2"), .. serverNonce, .. clientNonce];
+        var keys = HKDF.DeriveKey(HashAlgorithmName.SHA256, ikm, 64, salt, info);
         return (keys[..32], keys[32..]);
     }
 
@@ -146,7 +138,7 @@ public sealed class Wire : IDisposable
     }
 
     /// <summary>The next message; null when the other end has closed. Throws CryptographicException for a frame that
-    /// isn't from someone with the keys (the wrong token, or tampering).</summary>
+    /// isn't from someone with the keys (tampering).</summary>
     public async Task<JsonObject?> ReadAsync(CancellationToken ct = default)
     {
         var frame = await ReadFrameAsync(stream, ct);

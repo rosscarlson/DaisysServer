@@ -19,7 +19,7 @@ public static class JsonFile
     /// real server's settings, users and data.</summary>
     public static string? Home { get; } = Environment.GetEnvironmentVariable("DAISYSSERVER_HOME") is { Length: > 0 } h ? h : null;
 
-    /// <summary>%APPDATA%\DaisysServer: settings, users and tokens.</summary>
+    /// <summary>%APPDATA%\DaisysServer: settings (the server's key with them) and users.</summary>
     public static string SettingsFolder => Home ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DaisysServer");
 
     /// <summary>%LOCALAPPDATA%\DaisysServer\data: what modules keep for each user.</summary>

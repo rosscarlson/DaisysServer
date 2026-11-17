@@ -107,7 +107,7 @@ internal sealed class SettingsPage : UserControl
         // ---- folders
         var files = new StackPanel();
         files.Children.Add(Ui.Header("Folders"));
-        var settingsFolder = Folder("Settings, users and tokens", JsonFile.SettingsFolder);
+        var settingsFolder = Folder("Settings, users and the server's key", JsonFile.SettingsFolder);
         var dataFolder = Folder("Users' data", JsonFile.DataFolder);
         var logs = Folder("Logs", ModuleLog.Folder);
         dataFolder.Margin = logs.Margin = new Thickness(8, 0, 0, 0);
